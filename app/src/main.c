@@ -110,6 +110,16 @@ static void start_advertising(void)
 	}
 }
 
+/* ── Advertising restart work (deferred to let controller settle) ─── */
+static void adv_restart_work_handler(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(adv_restart_work, adv_restart_work_handler);
+
+static void adv_restart_work_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	start_advertising();
+}
+
 /* ── Connection callbacks ─────────────────────────────────────────── */
 static void connected(struct bt_conn *conn, uint8_t err)
 {
@@ -123,7 +133,9 @@ static void connected(struct bt_conn *conn, uint8_t err)
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	LOG_INF("Ring-One disconnected (reason %u)", reason);
-	start_advertising();
+	/* Controller needs ~100 ms to release resources before accepting a new
+	 * adv_start; calling it synchronously returns -EBUSY. */
+	k_work_schedule(&adv_restart_work, K_MSEC(100));
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
