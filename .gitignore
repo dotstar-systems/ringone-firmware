@@ -1,0 +1,33 @@
+# West workspace — populated by `west update`, not tracked
+/.west/
+/nrf/
+/zephyr/
+/bootloader/
+/modules/
+/tools/
+
+# Build output
+build/
+*.elf
+*.hex
+*.bin
+*.map
+*.lst
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
