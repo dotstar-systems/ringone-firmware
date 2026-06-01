@@ -182,7 +182,7 @@ int main(void)
 {
 	int err;
 
-	LOG_INF("Ring-One v0.1.0 | Dotstar Systems and Consulting | dotstarconsulting.com");
+	LOG_INF("Ring-One | Dotstar Systems and Consulting | dotstarconsulting.com");
 
 	err = ringone_sensors_init();
 	if (err) {
