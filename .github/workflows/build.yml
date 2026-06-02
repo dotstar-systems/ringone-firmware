@@ -24,12 +24,14 @@ jobs:
       - name: Install west
         run: pip install west
 
+      - name: West init
+        run: west init -l ringone-firmware
+
       - name: Cache NCS modules
         id: cache-ncs
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: |
-            .west
             nrf
             zephyr
             bootloader
@@ -38,15 +40,9 @@ jobs:
           key: ncs-v3.3.0-${{ hashFiles('ringone-firmware/west.yml') }}
           restore-keys: ncs-v3.3.0-
 
-      - name: West init & update
+      - name: West update
         if: steps.cache-ncs.outputs.cache-hit != 'true'
-        run: |
-          west init -l ringone-firmware
-          west update -o=--depth=1 -n
-
-      - name: West init (manifest only, modules from cache)
-        if: steps.cache-ncs.outputs.cache-hit == 'true'
-        run: west init -l ringone-firmware
+        run: west update -o=--depth=1 -n
 
       - name: Install Python requirements
         run: |
