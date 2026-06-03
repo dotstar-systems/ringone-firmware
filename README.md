@@ -2,7 +2,7 @@
 
 Firmware for the Ring•One industrial smart ring reference platform.
 
-**Platform:** Nordic nRF54L15 DK · **SDK:** nRF Connect SDK v3.3.0 · **BLE:** 5.4
+**Platform:** Nordic nRF54LM20DK · **SDK:** nRF Connect SDK v3.3.0 · **BLE:** 5.4
 
 Developed by [Dotstar Systems and Consulting](https://dotstarconsulting.com).
 
@@ -29,6 +29,76 @@ All characteristics are **notify-only** (no read permission). The device adverti
 
 ---
 
+## Wi-Fi telemetry setup
+
+### Hardware
+Plug nRF7002 EB2 shield onto the nRF54LM20DK P1/P2 headers.
+
+### Build with Wi-Fi (primary target)
+```sh
+west build -b nrf54lm20dk/nrf54lm20a/cpuapp app/ \
+  --pristine -- -DSHIELD="nrf7002eb2;nrf7002eb2_coex"
+```
+
+The `nrf7002eb2_coex` shield adds the `nrf_radio_coex` DTS node which
+auto-selects `MPSL_CX` and `MPSL_CX_NRF700X` — enabling BLE/Wi-Fi
+coexistence without any manual Kconfig. Do **not** set those symbols manually.
+
+### Provision Wi-Fi credentials — Option A: SoftAP (recommended)
+On first boot with no stored credentials, the device starts a `ringone`
+Wi-Fi hotspot running an HTTPS provisioning server. Connect your phone to
+`ringone`, open a browser, enter your home AP credentials, and the device
+reboots into station mode automatically.
+
+### Provision Wi-Fi credentials — Option B: shell
+Connect serial terminal (115200 baud), then:
+```
+uart:~$ wifi_cred add "YourSSID" WPA2-PSK "YourPassword"
+uart:~$ kernel reboot warm
+```
+
+### Provision MQTT TLS certificate (HiveMQ Cloud)
+1. Download HiveMQ Cloud root CA:
+   https://letsencrypt.org/certs/isrgrootx1.pem
+2. Install via TLS credentials shell:
+   ```
+   uart:~$ tls_cred add 1 ca_cert <paste PEM here>
+   ```
+
+### Cloud stack
+| Component   | Service                                         |
+|-------------|-------------------------------------------------|
+| MQTT broker | HiveMQ Cloud (free tier — 100 connections)      |
+| Time-series | InfluxDB Cloud v3 (free tier — 30 days)         |
+| Dashboard   | Grafana Cloud (free tier — shareable URL)       |
+
+HiveMQ → InfluxDB: Telegraf MQTT consumer plugin  
+InfluxDB → Grafana: native InfluxDB data source plugin
+
+### MQTT topics
+| Topic                            | Direction | QoS | Interval |
+|----------------------------------|-----------|-----|----------|
+| `ring-one/<clientId>/telemetry`  | publish   | 0   | 30 s     |
+| `ring-one/<clientId>/cmd`        | subscribe | 0   | future OTA |
+
+### Telegraf config snippet
+```toml
+[[inputs.mqtt_consumer]]
+  servers = ["ssl://your-cluster.s1.eu.hivemq.cloud:8883"]
+  topics  = ["ring-one/+/telemetry"]
+  data_format = "json"
+  json_time_key = "ts"
+  json_time_format = "unix"
+
+[[outputs.influxdb_v2]]
+  urls   = ["https://eu-central-1-1.aws.cloud2.influxdata.com"]
+  token  = "$INFLUX_TOKEN"
+  org    = "dotstar"
+  bucket = "ringone"
+```
+
+---
+
 ## Building
 
 ### Prerequisites
@@ -48,6 +118,11 @@ west update
 ### Build
 
 ```sh
+# Wi-Fi + BLE coexistence (primary):
+west build -b nrf54lm20dk/nrf54lm20a/cpuapp ringone-firmware/app \
+  -- -DSHIELD="nrf7002eb2;nrf7002eb2_coex"
+
+# BLE-only (no Wi-Fi shield):
 west build -b nrf54l15dk/nrf54l15/cpuapp ringone-firmware/app
 ```
 

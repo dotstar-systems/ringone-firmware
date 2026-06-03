@@ -11,6 +11,7 @@
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/logging/log.h>
 #include "ringone_sensors.h"
+#include "wifi_telemetry.h"
 
 LOG_MODULE_REGISTER(ringone_main, LOG_LEVEL_INF);
 
@@ -147,6 +148,9 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
 static void notify_work_handler(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(notify_work, notify_work_handler);
 
+/* Tracks elapsed seconds for MQTT publish interval */
+static uint32_t s_notify_ticks;
+
 static void notify_work_handler(struct k_work *work)
 {
 	ARG_UNUSED(work);
@@ -170,9 +174,34 @@ static void notify_work_handler(struct k_work *work)
 		temp_frac = -temp_frac;
 	}
 
-	LOG_INF("temp=%d.%02d hr=%u spo2=%u steps=%u bat=%u",
+	LOG_INF("temp=%d.%02d hr=%u spo2=%u steps=%u bat=%u wifi=%s",
 		(int)temp_int, (int)temp_frac,
-		g_data.heart_rate, g_data.spo2, g_data.steps, g_data.battery);
+		g_data.heart_rate, g_data.spo2, g_data.steps, g_data.battery,
+		wifi_telemetry_connected() ? "up" : "down");
+
+	/* MQTT publish every CONFIG_RINGONE_TELEMETRY_INTERVAL_SEC seconds.
+	 * BLE notify remains every 2 s — counters are independent. */
+	s_notify_ticks += 2;
+	if (s_notify_ticks >= CONFIG_RINGONE_TELEMETRY_INTERVAL_SEC) {
+		s_notify_ticks = 0;
+
+		ringone_telemetry_t payload = {
+			.timestamp   = 0, /* RING_ONE_TODO: SNTP — see wifi_telemetry.c */
+			.temperature = g_data.temperature,
+			.heart_rate  = g_data.heart_rate,
+			.spo2        = g_data.spo2,
+			.steps       = g_data.steps,
+			.battery     = g_data.battery,
+			/* RING_ONE_TODO: populate from bt_conn_get_info() */
+			.rssi_ble    = -60,
+		};
+
+		int ret = wifi_telemetry_publish(&payload);
+
+		if (ret && ret != -ENOTCONN) {
+			LOG_WRN("telemetry publish failed (err %d)", ret);
+		}
+	}
 
 	k_work_reschedule(&notify_work, K_SECONDS(2));
 }
@@ -196,10 +225,16 @@ int main(void)
 		return err;
 	}
 
+	/* Start BLE advertising before Wi-Fi init so the ring is discoverable
+	 * immediately — Wi-Fi/SoftAP provisioning can block for minutes on
+	 * first boot while the user connects and enters credentials. */
 	start_advertising();
 	LOG_INF("Ring-One advertising as \"%s\"", CONFIG_BT_DEVICE_NAME);
 
 	k_work_schedule(&notify_work, K_SECONDS(2));
+
+	err = wifi_telemetry_init();
+	LOG_INF("Wi-Fi telemetry init: %d", err);
 
 	return 0;
 }

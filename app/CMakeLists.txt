@@ -6,6 +6,7 @@ project(ringone_firmware VERSION 0.1.0)
 
 target_sources(app PRIVATE
   src/main.c
+  src/wifi_telemetry.c
   ../drivers/sensors/ringone_sensors.c
 )
 
