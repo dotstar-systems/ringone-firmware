@@ -61,6 +61,11 @@ static volatile uint32_t s_telemetry_interval_sec =
 	CONFIG_RINGONE_TELEMETRY_INTERVAL_SEC;
 
 /* ── State ────────────────────────────────────────────────────────── */
+/* Hostname stripped of any trailing ":port" from RINGONE_MQTT_BROKER_HOST.
+ * The Kconfig default may be set to "host:8883" for convenience; we split
+ * it so DNS lookup and TLS SNI both receive a bare hostname. */
+static char s_broker_host[128];
+
 static char s_device_id[16];
 static char s_mqtt_user_buf[MQTT_CRED_MAX_LEN];
 static char s_mqtt_pass_buf[MQTT_CRED_MAX_LEN];
@@ -279,11 +284,10 @@ static int resolve_broker(void)
 
 	snprintf(port_str, sizeof(port_str), "%d", MQTT_BROKER_PORT);
 
-	int err = zsock_getaddrinfo(MQTT_BROKER_HOST, port_str,
-				    &hints, &res);
+	int err = zsock_getaddrinfo(s_broker_host, port_str, &hints, &res);
 
 	if (err) {
-		LOG_ERR("DNS lookup %s failed (err %d)", MQTT_BROKER_HOST, err);
+		LOG_ERR("DNS lookup %s failed (err %d)", s_broker_host, err);
 		return -EHOSTUNREACH;
 	}
 	memcpy(&s_broker_addr, res->ai_addr, res->ai_addrlen);
@@ -320,7 +324,7 @@ static int broker_connect(void)
 	s_client.transport.tls.config.cipher_list   = NULL;
 	s_client.transport.tls.config.sec_tag_list  = tls_tags;
 	s_client.transport.tls.config.sec_tag_count = ARRAY_SIZE(tls_tags);
-	s_client.transport.tls.config.hostname      = MQTT_BROKER_HOST;
+	s_client.transport.tls.config.hostname      = s_broker_host;
 
 	int err = mqtt_connect(&s_client);
 
@@ -419,6 +423,17 @@ static void mqtt_thread_fn(void *p1, void *p2, void *p3)
 int ringone_mqtt_init(void)
 {
 	derive_device_id();
+
+	/* Strip optional ":port" from RINGONE_MQTT_BROKER_HOST.
+	 * The Kconfig default may be written as "hostname:8883" for clarity;
+	 * zsock_getaddrinfo and TLS SNI both need a bare hostname. */
+	strncpy(s_broker_host, MQTT_BROKER_HOST, sizeof(s_broker_host) - 1);
+	s_broker_host[sizeof(s_broker_host) - 1] = '\0';
+	char *colon = strchr(s_broker_host, ':');
+	if (colon) {
+		*colon = '\0';
+	}
+	LOG_INF("MQTT broker: %s:%d", s_broker_host, MQTT_BROKER_PORT);
 
 	/* Load credentials from PSA Protected Storage; fall back to Kconfig */
 	size_t ulen = 0, plen = 0;

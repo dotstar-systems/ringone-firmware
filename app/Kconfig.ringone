@@ -58,7 +58,7 @@ config RINGONE_MQTT_PASSWORD
 
 config RINGONE_SOFTAP_SSID
 	string "SoftAP provisioning network name"
-	default "RingOne-Setup"
+	default "dotstar-ringone-setup"
 	help
 	  SSID broadcast by the nRF54LM20A when in SoftAP provisioning mode.
 

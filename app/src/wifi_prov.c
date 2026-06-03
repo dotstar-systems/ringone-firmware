@@ -8,6 +8,7 @@
 #include <zephyr/net/conn_mgr_connectivity.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/net/wifi.h>
+#include <zephyr/net/wifi_mgmt.h>
 #include <zephyr/net/wifi_credentials.h>
 #include <dk_buttons_and_leds.h>
 #if IS_ENABLED(CONFIG_SOFTAP_WIFI_PROVISION)
@@ -29,7 +30,7 @@ LOG_MODULE_REGISTER(wifi_prov, LOG_LEVEL_INF);
  * CONFIG_WPA_SUPP_WPA3=y (i.e. CONFIG_WIFI_NM_WPA_SUPPLICANT_WPA3_*) is
  * already set; wire it up in wifi_prov_connect() when security type is SAE. */
 
-#define PROV_THREAD_STACK  4096
+#define PROV_THREAD_STACK  16384
 #define PROV_THREAD_PRIO   7
 
 /* Backoff steps for reconnect: 5 s → 15 s → 30 s → 60 s → 60 s */
@@ -58,6 +59,33 @@ static volatile bool s_wifi_ready_status;
 
 /* Long-press button flag */
 static volatile bool s_softap_requested;
+
+/* PSM management: disable for 120 s after fresh provisioning so mDNS SD
+ * remains stable while the nRF Wi-Fi Provisioner app confirms success.
+ * Matches SOFTAP_WIFI_PROVISION_SAMPLE_PSM_DISABLED_SECONDS = 120. */
+#define PSM_DISABLED_POST_PROV_SEC 120
+static volatile bool s_psm_disable_on_connect;
+static void psm_reenable_handler(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(psm_reenable_work, psm_reenable_handler);
+
+static void psm_reenable_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	struct net_if *iface = net_if_get_first_wifi();
+
+	if (!iface) {
+		return;
+	}
+	struct wifi_ps_params ps = {.enabled = WIFI_PS_ENABLED};
+	int err = net_mgmt(NET_REQUEST_WIFI_PS, iface, &ps, sizeof(ps));
+
+	if (err) {
+		LOG_WRN("Failed to re-enable Wi-Fi PSM (err %d)", err);
+	} else {
+		LOG_INF("Wi-Fi PSM re-enabled after %d s post-provisioning window",
+			PSM_DISABLED_POST_PROV_SEC);
+	}
+}
 
 /* ── Status notify helper ─────────────────────────────────────────── */
 
@@ -137,7 +165,7 @@ static void softap_event_handler(const struct softap_wifi_provision_evt *evt)
 	switch (evt->type) {
 	case SOFTAP_WIFI_PROVISION_EVT_STARTED:
 		LOG_INF("SoftAP '%s' started — connect to provision Ring-One",
-			CONFIG_RINGONE_SOFTAP_SSID);
+			CONFIG_SOFTAP_WIFI_PROVISION_SSID);
 		break;
 	case SOFTAP_WIFI_PROVISION_EVT_CLIENT_CONNECTED:
 		LOG_INF("SoftAP: provisioning client connected");
@@ -187,6 +215,28 @@ static void l4_event_handler(struct net_mgmt_event_callback *cb,
 				}
 			}
 		}
+		/* After fresh provisioning, disable PSM for PSM_DISABLED_POST_PROV_SEC
+		 * so mDNS SD stays stable while the provisioner app confirms
+		 * success.  On normal reboots with stored credentials, PSM is
+		 * left on for battery efficiency. */
+		if (s_psm_disable_on_connect) {
+			s_psm_disable_on_connect = false;
+			struct wifi_ps_params ps = {.enabled = WIFI_PS_DISABLED};
+			int ps_err = net_mgmt(NET_REQUEST_WIFI_PS, iface,
+					      &ps, sizeof(ps));
+			if (ps_err) {
+				LOG_WRN("Failed to disable Wi-Fi PSM (err %d)",
+					ps_err);
+			} else {
+				LOG_INF("Wi-Fi PSM disabled for %d s "
+					"(mDNS SD post-provisioning window)",
+					PSM_DISABLED_POST_PROV_SEC);
+				k_work_schedule(&psm_reenable_work,
+						K_SECONDS(
+						PSM_DISABLED_POST_PROV_SEC));
+			}
+		}
+
 		s_net_connected = true;
 		set_status(WIFI_STATUS_CONNECTED);
 		k_sem_give(&s_net_sem);
@@ -329,6 +379,8 @@ static void prov_thread_fn(void *p1, void *p2, void *p3)
 		} else {
 			LOG_INF("SoftAP provisioning complete");
 			have_creds = true;
+			/* Disable PSM on next connect for mDNS SD stability */
+			s_psm_disable_on_connect = true;
 		}
 	} else {
 		LOG_INF("Wi-Fi credentials found — skipping SoftAP");
