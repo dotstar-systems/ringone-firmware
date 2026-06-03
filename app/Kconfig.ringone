@@ -1,0 +1,75 @@
+# Ring•One Firmware · Dotstar Consulting · Apache 2.0
+# Ring-One application Kconfig — sourced from app/Kconfig
+
+config RINGONE_TELEMETRY_INTERVAL_SEC
+	int "Telemetry publish interval seconds"
+	default 30
+	range 10 300
+	help
+	  How often to publish telemetry to InfluxDB and MQTT broker.
+	  30 s balances data resolution vs battery life.
+	  TWT sleep cycle on nRF7002 is tuned to this interval.
+
+config RINGONE_INFLUX_HOST
+	string "InfluxDB Cloud hostname"
+	default "eu-central-1-1.aws.cloud2.influxdata.com"
+	help
+	  InfluxDB Cloud v3 write endpoint hostname.
+
+config RINGONE_INFLUX_ORG
+	string "InfluxDB organisation name"
+	default "dotstar"
+	help
+	  InfluxDB organisation name.  Provisioned once via shell; device uses
+	  runtime token from PSA Protected Storage for auth.
+
+config RINGONE_INFLUX_BUCKET
+	string "InfluxDB bucket name"
+	default "ringone"
+	help
+	  InfluxDB bucket to write telemetry into (30 day retention recommended).
+
+config RINGONE_MQTT_BROKER_HOST
+	string "HiveMQ Cloud broker hostname"
+	default "722d06c149744771bf2b3503827b63ae.s1.eu.hivemq.cloud:8883"
+	help
+	  HiveMQ Cloud free-tier broker hostname.
+	  Format: <cluster-id>.s1.<region>.hivemq.cloud
+	  Override with your real hostname; production devices get credentials
+	  from PSA Protected Storage, not Kconfig.
+
+config RINGONE_MQTT_BROKER_PORT
+	int "MQTT broker TLS port"
+	default 8883
+
+config RINGONE_MQTT_USERNAME
+	string "MQTT broker username (dev default only)"
+	default "ringone-firmware"
+	help
+	  Dev-only default.  Production devices use credentials written to
+	  PSA Protected Storage by the factory provisioning tool.
+
+config RINGONE_MQTT_PASSWORD
+	string "MQTT broker password (dev default only)"
+	default ""
+	help
+	  Dev-only default.  Leave empty in production — credentials stored in
+	  PSA Protected Storage (CRACEN HUK-encrypted, never plaintext in flash).
+
+config RINGONE_SOFTAP_SSID
+	string "SoftAP provisioning network name"
+	default "RingOne-Setup"
+	help
+	  SSID broadcast by the nRF54LM20A when in SoftAP provisioning mode.
+
+config RINGONE_SOFTAP_TIMEOUT_SEC
+	int "SoftAP auto-shutdown timeout seconds"
+	default 300
+	range 60 900
+	help
+	  If no Wi-Fi credentials are received via SoftAP within this period,
+	  SoftAP stops automatically to conserve battery.
+
+config RINGONE_WIFI_RECONNECT_DELAY_SEC
+	int "Wi-Fi reconnect backoff delay seconds"
+	default 30

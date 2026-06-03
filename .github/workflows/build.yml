@@ -6,9 +6,15 @@ on:
   pull_request:
     branches: [main]
 
+# ── Shared setup steps (YAML anchor) ─────────────────────────────────
+# Note: GitHub Actions does not support anchors natively in YAML; the
+# steps are duplicated per job.  A composite action can DRY this up in a
+# future refactor.  See RING_ONE_TODO in docs/cloud-setup.md.
+
 jobs:
-  build-ble:
-    name: nRF54L15 DK (BLE-only)
+  # ── Job 1: BLE-only ──────────────────────────────────────────────
+  build-ble-only:
+    name: nRF54LM20DK BLE-only
     runs-on: ubuntu-22.04
 
     steps:
@@ -50,7 +56,6 @@ jobs:
           pip install -r zephyr/scripts/requirements.txt
           pip install -r nrf/scripts/requirements.txt
 
-      # Zephyr SDK version — verify against NCS v3.3.0 release notes if this changes
       - name: Cache Zephyr SDK
         id: cache-sdk
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
@@ -65,25 +70,25 @@ jobs:
           tar xf zephyr-sdk-0.17.0_linux-x86_64_minimal.tar.xz -C "$HOME"
           "$HOME/zephyr-sdk-0.17.0/setup.sh" -t arm-zephyr-eabi -c
 
-      - name: Build nRF54L15 DK (BLE-only)
+      - name: Build BLE-only
         run: |
           west build \
-            -b nrf54l15dk/nrf54l15/cpuapp \
+            -b nrf54lm20dk/nrf54lm20a/cpuapp \
             ringone-firmware/app \
-            --build-dir build
+            --build-dir build-ble-only
 
-      - name: Upload build artifacts
+      - name: Upload BLE-only artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
-          name: ringone-firmware-ble-${{ github.sha }}
+          name: ringone-ble-only-${{ github.sha }}
           path: |
-            build/zephyr/zephyr.elf
-            build/zephyr/zephyr.hex
-          if-no-files-found: warn
+            build-ble-only/zephyr/zephyr.elf
+            build-ble-only/zephyr/zephyr.hex
           retention-days: 30
 
+  # ── Job 2: Wi-Fi (primary) ───────────────────────────────────────
   build-wifi:
-    name: nRF54LM20DK + nRF7002 EB2 (primary)
+    name: nRF54LM20DK + nRF7002 EB2 (Wi-Fi + BLE coex)
     runs-on: ubuntu-22.04
 
     steps:
@@ -125,7 +130,6 @@ jobs:
           pip install -r zephyr/scripts/requirements.txt
           pip install -r nrf/scripts/requirements.txt
 
-      # Zephyr SDK version — verify against NCS v3.3.0 release notes if this changes
       - name: Cache Zephyr SDK
         id: cache-sdk
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
@@ -140,7 +144,7 @@ jobs:
           tar xf zephyr-sdk-0.17.0_linux-x86_64_minimal.tar.xz -C "$HOME"
           "$HOME/zephyr-sdk-0.17.0/setup.sh" -t arm-zephyr-eabi -c
 
-      - name: Build nRF54LM20DK + nRF7002 EB2 with BLE/Wi-Fi coexistence
+      - name: Build Wi-Fi + BLE coexistence
         run: |
           west build \
             -b nrf54lm20dk/nrf54lm20a/cpuapp \
@@ -148,11 +152,98 @@ jobs:
             --build-dir build-wifi \
             -- -DSHIELD="nrf7002eb2;nrf7002eb2_coex"
 
-      - name: Upload Wi-Fi build artifact
+      - name: Upload Wi-Fi artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
-          name: ringone-firmware-wifi-${{ github.sha }}
+          name: ringone-wifi-${{ github.sha }}
           path: |
-            build-wifi/zephyr/zephyr.hex
             build-wifi/zephyr/zephyr.elf
+            build-wifi/zephyr/zephyr.hex
           retention-days: 30
+
+  # ── Job 3: Wi-Fi + TF-M secure (future) ─────────────────────────
+  build-wifi-secure:
+    name: nRF54LM20DK/ns + nRF7002 EB2 (TF-M secure baseline)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          path: ringone-firmware
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: Install west
+        run: pip install west
+
+      - name: West init
+        run: west init -l ringone-firmware
+
+      - name: Cache NCS modules
+        id: cache-ncs
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: |
+            nrf
+            zephyr
+            bootloader
+            modules
+            tools
+          key: ncs-v3.3.0-${{ hashFiles('ringone-firmware/west.yml') }}
+          restore-keys: ncs-v3.3.0-
+
+      - name: West update
+        if: steps.cache-ncs.outputs.cache-hit != 'true'
+        run: west update -o=--depth=1 -n
+
+      - name: Install Python requirements
+        run: |
+          pip install -r zephyr/scripts/requirements.txt
+          pip install -r nrf/scripts/requirements.txt
+
+      - name: Cache Zephyr SDK
+        id: cache-sdk
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: ~/zephyr-sdk-0.17.0
+          key: zephyr-sdk-0.17.0-arm
+
+      - name: Install Zephyr SDK
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          wget -q https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.17.0/zephyr-sdk-0.17.0_linux-x86_64_minimal.tar.xz
+          tar xf zephyr-sdk-0.17.0_linux-x86_64_minimal.tar.xz -C "$HOME"
+          "$HOME/zephyr-sdk-0.17.0/setup.sh" -t arm-zephyr-eabi -c
+
+      # RING_ONE_TODO: enable TF-M partition
+      # The /ns target (nrf54lm20dk/nrf54lm20a/cpuapp/ns) requires a
+      # TF-M build configuration.  Once the Secure Processing Environment
+      # partition is configured in pm_static.yml and the TF-M trust zone
+      # setup is complete, remove this comment and uncomment the build step.
+      #
+      # Required additions to prj.conf for /ns target:
+      #   CONFIG_BUILD_WITH_TFM=y
+      #   CONFIG_TFM_PROFILE_TYPE_SMALL=y
+      #   CONFIG_PM_PARTITION_SIZE_TFM=0x20000
+      #   CONFIG_PM_PARTITION_SIZE_TFM_SRAM=0xa000
+      - name: Build Wi-Fi secure (TF-M placeholder)
+        run: |
+          echo "RING_ONE_TODO: TF-M /ns build not yet configured."
+          echo "Target: nrf54lm20dk/nrf54lm20a/cpuapp/ns with shield nrf7002eb2;nrf7002eb2_coex"
+          echo "See docs/cloud-setup.md for TF-M partition requirements."
+          # west build \
+          #   -b nrf54lm20dk/nrf54lm20a/cpuapp/ns \
+          #   ringone-firmware/app \
+          #   --build-dir build-wifi-secure \
+          #   -- -DSHIELD="nrf7002eb2;nrf7002eb2_coex"
+
+      - name: Upload secure artifact (placeholder)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: ringone-wifi-secure-${{ github.sha }}
+          path: ringone-firmware/app/src/main.c  # placeholder until TF-M is configured
+          retention-days: 7

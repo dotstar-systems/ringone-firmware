@@ -6,7 +6,12 @@ project(ringone_firmware VERSION 0.1.0)
 
 target_sources(app PRIVATE
   src/main.c
-  src/wifi_telemetry.c
+  src/wifi_prov.c
+  src/influx_telemetry.c
+  src/mqtt_client.c
+  src/sntp_sync.c
+  src/watchdog.c
+  src/ringone_shell.c
   ../drivers/sensors/ringone_sensors.c
 )
 

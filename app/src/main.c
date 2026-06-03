@@ -1,8 +1,4 @@
-/*
- * Ring•One Firmware
- * Copyright (c) 2026 Dotstar Systems and Consulting (dotstarconsulting.com)
- * SPDX-License-Identifier: Apache-2.0
- */
+/* Ring•One Firmware · Dotstar Consulting · Apache 2.0 */
 
 #include <zephyr/kernel.h>
 #include <zephyr/bluetooth/bluetooth.h>
@@ -11,34 +7,47 @@
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/logging/log.h>
 #include "ringone_sensors.h"
-#include "wifi_telemetry.h"
+#include "wifi_prov.h"
+#include "influx_telemetry.h"
+#include "mqtt_client.h"
+#include "sntp_sync.h"
+#include "watchdog.h"
 
 LOG_MODULE_REGISTER(ringone_main, LOG_LEVEL_INF);
 
 /* ── UUIDs ────────────────────────────────────────────────────────── */
-#define UUID_SVC_VAL  BT_UUID_128_ENCODE(0xfd0d5c94, 0x193c, 0x496e, 0xb80f, 0x511a474a449f)
-#define UUID_TEMP_VAL BT_UUID_128_ENCODE(0xac70a713, 0x348e, 0x43db, 0xbf84, 0xffce9d82120d)
-#define UUID_HR_VAL   BT_UUID_128_ENCODE(0x75fb4a26, 0x440c, 0x4dd3, 0xbe96, 0x91ad75ecb864)
-#define UUID_SPO2_VAL BT_UUID_128_ENCODE(0xc4671ec2, 0x35f1, 0x40c4, 0x887b, 0x37bc00ec3427)
-#define UUID_STEP_VAL BT_UUID_128_ENCODE(0x7956ed3f, 0x1cb4, 0x47ce, 0x89ad, 0x9742bc0ab8bf)
-#define UUID_BAT_VAL  BT_UUID_128_ENCODE(0x02e35db9, 0x662d, 0x4229, 0xa874, 0xd4f04c82653a)
+#define UUID_SVC_VAL      BT_UUID_128_ENCODE(0xfd0d5c94, 0x193c, 0x496e, \
+					     0xb80f, 0x511a474a449f)
+#define UUID_TEMP_VAL     BT_UUID_128_ENCODE(0xac70a713, 0x348e, 0x43db, \
+					     0xbf84, 0xffce9d82120d)
+#define UUID_HR_VAL       BT_UUID_128_ENCODE(0x75fb4a26, 0x440c, 0x4dd3, \
+					     0xbe96, 0x91ad75ecb864)
+#define UUID_SPO2_VAL     BT_UUID_128_ENCODE(0xc4671ec2, 0x35f1, 0x40c4, \
+					     0x887b, 0x37bc00ec3427)
+#define UUID_STEP_VAL     BT_UUID_128_ENCODE(0x7956ed3f, 0x1cb4, 0x47ce, \
+					     0x89ad, 0x9742bc0ab8bf)
+#define UUID_BAT_VAL      BT_UUID_128_ENCODE(0x02e35db9, 0x662d, 0x4229, \
+					     0xa874, 0xd4f04c82653a)
 
-#define UUID_SVC  BT_UUID_DECLARE_128(UUID_SVC_VAL)
-#define UUID_TEMP BT_UUID_DECLARE_128(UUID_TEMP_VAL)
-#define UUID_HR   BT_UUID_DECLARE_128(UUID_HR_VAL)
-#define UUID_SPO2 BT_UUID_DECLARE_128(UUID_SPO2_VAL)
-#define UUID_STEP BT_UUID_DECLARE_128(UUID_STEP_VAL)
-#define UUID_BAT  BT_UUID_DECLARE_128(UUID_BAT_VAL)
+/* Wi-Fi provisioning characteristics */
+#define UUID_WIFI_SSID_VAL  BT_UUID_128_ENCODE(0xa1b2c3d4, 0x0001, 0x0001, \
+					       0x0001, 0xa1b2c3d40001)
+#define UUID_WIFI_PASS_VAL  BT_UUID_128_ENCODE(0xa1b2c3d4, 0x0001, 0x0001, \
+					       0x0001, 0xa1b2c3d40002)
+#define UUID_WIFI_STAT_VAL  BT_UUID_128_ENCODE(0xa1b2c3d4, 0x0001, 0x0001, \
+					       0x0001, 0xa1b2c3d40003)
 
-/* ── Data ─────────────────────────────────────────────────────────── */
-typedef struct {
-	int16_t  temperature;  /* 0.01 °C per LSB */
-	uint8_t  heart_rate;   /* BPM */
-	uint8_t  spo2;         /* % */
-	uint32_t steps;        /* count since boot */
-	uint8_t  battery;      /* % */
-} ringone_data_t;
+#define UUID_SVC       BT_UUID_DECLARE_128(UUID_SVC_VAL)
+#define UUID_TEMP      BT_UUID_DECLARE_128(UUID_TEMP_VAL)
+#define UUID_HR        BT_UUID_DECLARE_128(UUID_HR_VAL)
+#define UUID_SPO2      BT_UUID_DECLARE_128(UUID_SPO2_VAL)
+#define UUID_STEP      BT_UUID_DECLARE_128(UUID_STEP_VAL)
+#define UUID_BAT       BT_UUID_DECLARE_128(UUID_BAT_VAL)
+#define UUID_WIFI_SSID BT_UUID_DECLARE_128(UUID_WIFI_SSID_VAL)
+#define UUID_WIFI_PASS BT_UUID_DECLARE_128(UUID_WIFI_PASS_VAL)
+#define UUID_WIFI_STAT BT_UUID_DECLARE_128(UUID_WIFI_STAT_VAL)
 
+/* ── Shared sensor data ───────────────────────────────────────────── */
 static ringone_data_t g_data;
 
 /* ── GATT ─────────────────────────────────────────────────────────── */
@@ -52,42 +61,113 @@ static void ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
  * Attribute index map (BT_GATT_CHARACTERISTIC expands to 2 entries):
  *   [0]  primary service declaration
  *   [1]  temperature char declaration
- *   [2]  temperature char value      ← notify
+ *   [2]  temperature char value      ← notify  (unchanged)
  *   [3]  temperature CCC
  *   [4]  heart_rate char declaration
- *   [5]  heart_rate char value       ← notify
+ *   [5]  heart_rate char value       ← notify  (unchanged)
  *   [6]  heart_rate CCC
  *   [7]  spo2 char declaration
- *   [8]  spo2 char value             ← notify
+ *   [8]  spo2 char value             ← notify  (unchanged)
  *   [9]  spo2 CCC
  *   [10] steps char declaration
- *   [11] steps char value            ← notify
+ *   [11] steps char value            ← notify  (unchanged)
  *   [12] steps CCC
  *   [13] battery char declaration
- *   [14] battery char value          ← notify
+ *   [14] battery char value          ← notify  (unchanged)
  *   [15] battery CCC
+ *   [16] wifi_ssid char declaration
+ *   [17] wifi_ssid char value        ← write
+ *   [18] wifi_pass char declaration
+ *   [19] wifi_pass char value        ← write (ENCRYPT, requires bond)
+ *   [20] wifi_status char declaration
+ *   [21] wifi_status char value      ← notify + read
+ *   [22] wifi_status CCC
  */
+
+/* Write callbacks — delegate to wifi_prov.c */
+static ssize_t wifi_ssid_write(struct bt_conn *conn,
+				const struct bt_gatt_attr *attr,
+				const void *buf, uint16_t len,
+				uint16_t offset, uint8_t flags)
+{
+	ARG_UNUSED(conn);
+	ARG_UNUSED(attr);
+	ARG_UNUSED(offset);
+	ARG_UNUSED(flags);
+	wifi_prov_on_ssid_write(buf, len);
+	return (ssize_t)len;
+}
+
+static ssize_t wifi_pass_write(struct bt_conn *conn,
+				const struct bt_gatt_attr *attr,
+				const void *buf, uint16_t len,
+				uint16_t offset, uint8_t flags)
+{
+	ARG_UNUSED(conn);
+	ARG_UNUSED(attr);
+	ARG_UNUSED(offset);
+	ARG_UNUSED(flags);
+	wifi_prov_on_password_write(buf, len);
+	return (ssize_t)len;
+}
+
+static ssize_t wifi_status_read(struct bt_conn *conn,
+				 const struct bt_gatt_attr *attr,
+				 void *buf, uint16_t len, uint16_t offset)
+{
+	ARG_UNUSED(conn);
+	ARG_UNUSED(attr);
+	uint8_t status = (uint8_t)wifi_prov_get_status();
+
+	return bt_gatt_attr_read(conn, attr, buf, len, offset,
+				 &status, sizeof(status));
+}
+
 BT_GATT_SERVICE_DEFINE(ringone_svc,
 	BT_GATT_PRIMARY_SERVICE(UUID_SVC),
 
+	/* Temperature — unchanged */
 	BT_GATT_CHARACTERISTIC(UUID_TEMP, BT_GATT_CHRC_NOTIFY,
 		BT_GATT_PERM_NONE, NULL, NULL, NULL),
 	BT_GATT_CCC(ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
+	/* Heart Rate — unchanged */
 	BT_GATT_CHARACTERISTIC(UUID_HR, BT_GATT_CHRC_NOTIFY,
 		BT_GATT_PERM_NONE, NULL, NULL, NULL),
 	BT_GATT_CCC(ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
+	/* SpO2 — unchanged */
 	BT_GATT_CHARACTERISTIC(UUID_SPO2, BT_GATT_CHRC_NOTIFY,
 		BT_GATT_PERM_NONE, NULL, NULL, NULL),
 	BT_GATT_CCC(ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
+	/* Steps — unchanged */
 	BT_GATT_CHARACTERISTIC(UUID_STEP, BT_GATT_CHRC_NOTIFY,
 		BT_GATT_PERM_NONE, NULL, NULL, NULL),
 	BT_GATT_CCC(ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
+	/* Battery — unchanged */
 	BT_GATT_CHARACTERISTIC(UUID_BAT, BT_GATT_CHRC_NOTIFY,
 		BT_GATT_PERM_NONE, NULL, NULL, NULL),
+	BT_GATT_CCC(ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+
+	/* WiFi SSID — write only, no encryption required */
+	BT_GATT_CHARACTERISTIC(UUID_WIFI_SSID,
+		BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
+		BT_GATT_PERM_WRITE,
+		NULL, wifi_ssid_write, NULL),
+
+	/* WiFi Password — write requires bonded connection (WRITE_ENCRYPT) */
+	BT_GATT_CHARACTERISTIC(UUID_WIFI_PASS,
+		BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
+		BT_GATT_PERM_WRITE_ENCRYPT,
+		NULL, wifi_pass_write, NULL),
+
+	/* WiFi Status — notify + read, value: 0x00–0x03 */
+	BT_GATT_CHARACTERISTIC(UUID_WIFI_STAT,
+		BT_GATT_CHRC_NOTIFY | BT_GATT_CHRC_READ,
+		BT_GATT_PERM_READ,
+		wifi_status_read, NULL, NULL),
 	BT_GATT_CCC(ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 );
 
@@ -104,14 +184,14 @@ static const struct bt_data sd[] = {
 
 static void start_advertising(void)
 {
-	int err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_2, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+	int err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_2, ad, ARRAY_SIZE(ad),
+				  sd, ARRAY_SIZE(sd));
 
 	if (err) {
 		LOG_ERR("Advertising start failed (err %d)", err);
 	}
 }
 
-/* ── Advertising restart work (deferred to let controller settle) ─── */
 static void adv_restart_work_handler(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(adv_restart_work, adv_restart_work_handler);
 
@@ -134,8 +214,6 @@ static void connected(struct bt_conn *conn, uint8_t err)
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	LOG_INF("Ring-One disconnected (reason %u)", reason);
-	/* Controller needs ~100 ms to release resources before accepting a new
-	 * adv_start; calling it synchronously returns -EBUSY. */
 	k_work_schedule(&adv_restart_work, K_MSEC(100));
 }
 
@@ -144,28 +222,45 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.disconnected = disconnected,
 };
 
-/* ── Notify loop (2 s period) ─────────────────────────────────────── */
+/* ── Notify + telemetry loop (2 s period) ─────────────────────────── */
 static void notify_work_handler(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(notify_work, notify_work_handler);
 
-/* Tracks elapsed seconds for MQTT publish interval */
 static uint32_t s_notify_ticks;
 
 static void notify_work_handler(struct k_work *work)
 {
 	ARG_UNUSED(work);
 
+	/* Read sensors */
 	g_data.temperature = ringone_read_temperature();
 	g_data.heart_rate  = ringone_read_heart_rate();
 	g_data.spo2        = ringone_read_spo2();
 	g_data.steps       = ringone_read_steps();
 	g_data.battery     = ringone_read_battery();
 
-	bt_gatt_notify(NULL, &ringone_svc.attrs[2],  &g_data.temperature, sizeof(g_data.temperature));
-	bt_gatt_notify(NULL, &ringone_svc.attrs[5],  &g_data.heart_rate,  sizeof(g_data.heart_rate));
-	bt_gatt_notify(NULL, &ringone_svc.attrs[8],  &g_data.spo2,        sizeof(g_data.spo2));
-	bt_gatt_notify(NULL, &ringone_svc.attrs[11], &g_data.steps,       sizeof(g_data.steps));
-	bt_gatt_notify(NULL, &ringone_svc.attrs[14], &g_data.battery,     sizeof(g_data.battery));
+	/* BLE notify — existing characteristics unchanged at attrs[2,5,8,11,14] */
+	bt_gatt_notify(NULL, &ringone_svc.attrs[2],  &g_data.temperature,
+		       sizeof(g_data.temperature));
+	bt_gatt_notify(NULL, &ringone_svc.attrs[5],  &g_data.heart_rate,
+		       sizeof(g_data.heart_rate));
+	bt_gatt_notify(NULL, &ringone_svc.attrs[8],  &g_data.spo2,
+		       sizeof(g_data.spo2));
+	bt_gatt_notify(NULL, &ringone_svc.attrs[11], &g_data.steps,
+		       sizeof(g_data.steps));
+	bt_gatt_notify(NULL, &ringone_svc.attrs[14], &g_data.battery,
+		       sizeof(g_data.battery));
+
+	/* Feed hardware watchdog every 2 s tick (well within 30 s window) */
+	watchdog_feed();
+
+	/* Telemetry counter: publish every RINGONE_TELEMETRY_INTERVAL_SEC */
+	s_notify_ticks += 2;
+	if (s_notify_ticks >= CONFIG_RINGONE_TELEMETRY_INTERVAL_SEC) {
+		s_notify_ticks = 0;
+		influx_telemetry_publish(&g_data);   /* PATH B */
+		mqtt_publish_telemetry(&g_data);     /* PATH C */
+	}
 
 	int16_t temp_int  = g_data.temperature / 100;
 	int16_t temp_frac = g_data.temperature % 100;
@@ -174,34 +269,16 @@ static void notify_work_handler(struct k_work *work)
 		temp_frac = -temp_frac;
 	}
 
-	LOG_INF("temp=%d.%02d hr=%u spo2=%u steps=%u bat=%u wifi=%s",
+	LOG_INF("[%u] temp=%d.%02d hr=%u spo2=%u steps=%u bat=%u "
+		"wifi=%s influx=%s mqtt=%s",
+		sntp_get_unix_time(),
 		(int)temp_int, (int)temp_frac,
-		g_data.heart_rate, g_data.spo2, g_data.steps, g_data.battery,
-		wifi_telemetry_connected() ? "up" : "down");
-
-	/* MQTT publish every CONFIG_RINGONE_TELEMETRY_INTERVAL_SEC seconds.
-	 * BLE notify remains every 2 s — counters are independent. */
-	s_notify_ticks += 2;
-	if (s_notify_ticks >= CONFIG_RINGONE_TELEMETRY_INTERVAL_SEC) {
-		s_notify_ticks = 0;
-
-		ringone_telemetry_t payload = {
-			.timestamp   = 0, /* RING_ONE_TODO: SNTP — see wifi_telemetry.c */
-			.temperature = g_data.temperature,
-			.heart_rate  = g_data.heart_rate,
-			.spo2        = g_data.spo2,
-			.steps       = g_data.steps,
-			.battery     = g_data.battery,
-			/* RING_ONE_TODO: populate from bt_conn_get_info() */
-			.rssi_ble    = -60,
-		};
-
-		int ret = wifi_telemetry_publish(&payload);
-
-		if (ret && ret != -ENOTCONN) {
-			LOG_WRN("telemetry publish failed (err %d)", ret);
-		}
-	}
+		g_data.heart_rate, g_data.spo2,
+		g_data.steps, g_data.battery,
+		wifi_prov_get_status() == WIFI_STATUS_CONNECTED
+			? "UP" : "DOWN",
+		influx_telemetry_connected() ? "OK" : "--",
+		mqtt_client_connected()      ? "OK" : "--");
 
 	k_work_reschedule(&notify_work, K_SECONDS(2));
 }
@@ -211,7 +288,14 @@ int main(void)
 {
 	int err;
 
-	LOG_INF("Ring-One | Dotstar Systems and Consulting | dotstarconsulting.com");
+	LOG_INF("Ring-One | Dotstar Systems and Consulting | "
+		"dotstarconsulting.com");
+
+	/* a. Hardware watchdog — must be first */
+	err = watchdog_init();
+	if (err) {
+		LOG_WRN("watchdog_init failed (err %d) — continuing", err);
+	}
 
 	err = ringone_sensors_init();
 	if (err) {
@@ -219,22 +303,44 @@ int main(void)
 		return err;
 	}
 
+	/* b. BLE + GATT server */
 	err = bt_enable(NULL);
 	if (err) {
 		LOG_ERR("Bluetooth init failed (err %d)", err);
 		return err;
 	}
 
-	/* Start BLE advertising before Wi-Fi init so the ring is discoverable
-	 * immediately — Wi-Fi/SoftAP provisioning can block for minutes on
-	 * first boot while the user connects and enters credentials. */
+	/* Pass WiFi-Status GATT attr to wifi_prov for notify (attrs[21]) */
+	wifi_prov_set_status_attr(&ringone_svc.attrs[21]);
+
+	/* Start advertising before Wi-Fi init so the ring is discoverable
+	 * immediately — provisioning may block on first boot. */
 	start_advertising();
 	LOG_INF("Ring-One advertising as \"%s\"", CONFIG_BT_DEVICE_NAME);
 
-	k_work_schedule(&notify_work, K_SECONDS(2));
+	/* c. Wi-Fi provisioning — async, spawns wifi_prov thread */
+	err = wifi_prov_init();
+	if (err) {
+		LOG_ERR("wifi_prov_init failed (err %d)", err);
+	}
 
-	err = wifi_telemetry_init();
-	LOG_INF("Wi-Fi telemetry init: %d", err);
+	/* d. SNTP time sync — async, spawns sntp_sync thread */
+	sntp_sync();
+
+	/* e. InfluxDB HTTPS telemetry — async, spawns influx_pub thread */
+	err = influx_telemetry_init();
+	if (err) {
+		LOG_ERR("influx_telemetry_init failed (err %d)", err);
+	}
+
+	/* f. MQTT HiveMQ bidirectional — async, spawns mqtt_client thread */
+	err = ringone_mqtt_init();
+	if (err) {
+		LOG_ERR("mqtt_client_init failed (err %d)", err);
+	}
+
+	/* Start 2 s BLE notify + telemetry loop */
+	k_work_schedule(&notify_work, K_SECONDS(2));
 
 	return 0;
 }
