@@ -43,9 +43,8 @@ LOG_MODULE_REGISTER(mqtt_client, LOG_LEVEL_INF);
 #define MQTT_BROKER_HOST    CONFIG_RINGONE_MQTT_BROKER_HOST
 #define MQTT_BROKER_PORT    CONFIG_RINGONE_MQTT_BROKER_PORT
 #define MQTT_KEEPALIVE_SEC  60
-#define MQTT_TLS_TAG        1
 
-#define MQTT_THREAD_STACK   4096
+#define MQTT_THREAD_STACK   8192
 #define MQTT_THREAD_PRIO    9
 
 /* Exponential backoff: 5 s → 10 s → 30 s → 60 s */
@@ -79,6 +78,9 @@ static struct sockaddr_storage s_broker_addr;
 
 static K_MUTEX_DEFINE(s_mutex);
 static volatile bool s_mqtt_connected;
+
+/* Outbound publish queue — keeps mqtt_publish()/TLS-encrypt off sysworkq */
+K_MSGQ_DEFINE(s_pub_queue, sizeof(ringone_data_t), 4, 4);
 
 /* L4 connectivity */
 static struct net_mgmt_event_callback s_l4_cb;
@@ -297,7 +299,6 @@ static int resolve_broker(void)
 
 static int broker_connect(void)
 {
-	static sec_tag_t tls_tags[] = {MQTT_TLS_TAG};
 	struct sockaddr_in *broker = (struct sockaddr_in *)&s_broker_addr;
 
 	broker->sin_port = htons(MQTT_BROKER_PORT);
@@ -319,11 +320,15 @@ static int broker_connect(void)
 		s_client.password  = &s_mqtt_pass;
 	}
 
+	/* RING_ONE_TODO: register HiveMQ CA cert via tls_credential_add() and
+	 * change peer_verify back to TLS_PEER_VERIFY_REQUIRED once provisioned.
+	 * sec_tag_list must stay NULL until a credential is registered — Zephyr
+	 * validates the tag list on setsockopt even when peer_verify is NONE. */
 	s_client.transport.type = MQTT_TRANSPORT_SECURE;
-	s_client.transport.tls.config.peer_verify   = TLS_PEER_VERIFY_REQUIRED;
+	s_client.transport.tls.config.peer_verify   = TLS_PEER_VERIFY_NONE;
 	s_client.transport.tls.config.cipher_list   = NULL;
-	s_client.transport.tls.config.sec_tag_list  = tls_tags;
-	s_client.transport.tls.config.sec_tag_count = ARRAY_SIZE(tls_tags);
+	s_client.transport.tls.config.sec_tag_list  = NULL;
+	s_client.transport.tls.config.sec_tag_count = 0;
 	s_client.transport.tls.config.hostname      = s_broker_host;
 
 	int err = mqtt_connect(&s_client);
@@ -349,6 +354,8 @@ static void l4_handler(struct net_mgmt_event_callback *cb,
 	}
 }
 
+static void pub_queue_drain(void);
+
 /* ── MQTT thread ──────────────────────────────────────────────────── */
 
 static K_THREAD_STACK_DEFINE(s_stack, MQTT_THREAD_STACK);
@@ -373,8 +380,14 @@ static void mqtt_thread_fn(void *p1, void *p2, void *p3)
 			k_sem_take(&s_net_sem, K_FOREVER);
 		}
 
+		/* connecting: broker_connect() sent MQTT CONNECT but CONNACK not
+		 * yet received.  Prevents calling broker_connect() again on every
+		 * loop iteration while we wait, which would leak TLS context slots
+		 * and cause HiveMQ to forcibly drop the session (duplicate client_id). */
+		bool connecting = false;
+
 		while (s_net_connected) {
-			if (!s_mqtt_connected) {
+			if (!s_mqtt_connected && !connecting) {
 				if (resolve_broker() != 0 ||
 				    broker_connect() != 0) {
 					uint32_t delay = s_backoff_sec[
@@ -392,23 +405,64 @@ static void mqtt_thread_fn(void *p1, void *p2, void *p3)
 					continue;
 				}
 				backoff_idx = 0;
+				connecting = true;
 			}
 
-			int rc = mqtt_input(&s_client);
+			/* Poll the socket for up to 1 s.  This guarantees
+			 * mqtt_live() and pub_queue_drain() run at least once per
+			 * second even when the broker sends nothing, so keepalive
+			 * PINGREQ is sent on time and queued telemetry is published.
+			 * mqtt_input() is only called when data is actually available,
+			 * so it never blocks and there is no need for SO_RCVTIMEO. */
+			struct zsock_pollfd pfd = {
+				.fd     = s_client.transport.tls.sock,
+				.events = ZSOCK_POLLIN,
+			};
+			int poll_rc = zsock_poll(&pfd, 1, 1000);
 
-			if (rc && rc != -EAGAIN) {
-				LOG_WRN("mqtt_input error %d — reconnecting",
-					rc);
+			if (poll_rc < 0) {
+				LOG_WRN("poll error %d — reconnecting", poll_rc);
 				k_mutex_lock(&s_mutex, K_FOREVER);
 				s_mqtt_connected = false;
 				k_mutex_unlock(&s_mutex);
+				connecting = false;
 				mqtt_disconnect(&s_client, NULL);
 				continue;
 			}
+
+			if (poll_rc > 0) {
+				int rc = mqtt_input(&s_client);
+
+				if (rc && rc != -EAGAIN) {
+					LOG_WRN("mqtt_input error %d — "
+						"reconnecting", rc);
+					k_mutex_lock(&s_mutex, K_FOREVER);
+					s_mqtt_connected = false;
+					k_mutex_unlock(&s_mutex);
+					connecting = false;
+					mqtt_disconnect(&s_client, NULL);
+					continue;
+				}
+			}
+
+			if (s_mqtt_connected) {
+				connecting = false;
+				pub_queue_drain();
+				/* If pub_queue_drain() cleared s_mqtt_connected
+				 * (mqtt_publish failed), close the socket before the
+				 * next broker_connect() to avoid a duplicate-clientid
+				 * forced disconnect from HiveMQ. */
+				if (!s_mqtt_connected) {
+					connecting = false;
+					mqtt_disconnect(&s_client, NULL);
+					continue;
+				}
+			}
+
 			mqtt_live(&s_client);
 		}
 
-		if (s_mqtt_connected) {
+		if (s_mqtt_connected || connecting) {
 			mqtt_disconnect(&s_client, NULL);
 			k_mutex_lock(&s_mutex, K_FOREVER);
 			s_mqtt_connected = false;
@@ -476,12 +530,16 @@ void mqtt_publish_telemetry(const ringone_data_t *data)
 	if (!data) {
 		return;
 	}
+	/* Non-blocking enqueue — mqtt_thread drains this and calls
+	 * mqtt_publish() in its own context, keeping TLS encrypt off sysworkq. */
+	k_msgq_put(&s_pub_queue, data, K_NO_WAIT);
+}
 
-	k_mutex_lock(&s_mutex, K_FOREVER);
-	bool connected = s_mqtt_connected;
-	k_mutex_unlock(&s_mutex);
+static void pub_queue_drain(void)
+{
+	ringone_data_t data;
 
-	if (!connected) {
+	if (k_msgq_get(&s_pub_queue, &data, K_NO_WAIT) != 0) {
 		return;
 	}
 
@@ -497,11 +555,11 @@ void mqtt_publish_telemetry(const ringone_data_t *data)
 		"\"battery\":%u,"
 		"\"rssi_ble\":%d}",
 		s_device_id, ts,
-		(unsigned)data->heart_rate,
-		(unsigned)data->spo2,
-		(double)data->temperature / 100.0,
-		(unsigned)data->steps,
-		(unsigned)data->battery,
+		(unsigned)data.heart_rate,
+		(unsigned)data.spo2,
+		(double)data.temperature / 100.0,
+		(unsigned)data.steps,
+		(unsigned)data.battery,
 		-60);  /* RING_ONE_TODO: bt_conn_get_info() RSSI */
 
 	if (jlen < 0 || jlen >= (int)sizeof(json)) {

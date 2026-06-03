@@ -41,9 +41,8 @@ LOG_MODULE_REGISTER(influx_telemetry, LOG_LEVEL_INF);
 
 #define INFLUX_HOST   CONFIG_RINGONE_INFLUX_HOST
 #define INFLUX_PORT   443
-#define INFLUX_TLS_TAG  2   /* separate tag from MQTT (tag 1) */
 
-#define INFLUX_THREAD_STACK  4096
+#define INFLUX_THREAD_STACK  8192
 #define INFLUX_THREAD_PRIO   8
 #define INFLUX_TIMEOUT_MS    10000
 
@@ -106,7 +105,6 @@ static int do_post(const char *body, size_t body_len)
 		return -EHOSTUNREACH;
 	}
 
-	sec_tag_t tls_tags[] = {INFLUX_TLS_TAG};
 	int sock = zsock_socket(AF_INET, SOCK_STREAM, IPPROTO_TLS_1_2);
 
 	if (sock < 0) {
@@ -115,13 +113,13 @@ static int do_post(const char *body, size_t body_len)
 		return -errno;
 	}
 
-	/* TLS peer verification disabled until CA cert is provisioned */
+	/* TLS peer verification disabled until CA cert is provisioned.
+	 * Do NOT set TLS_SEC_TAG_LIST — Zephyr validates the tag even when
+	 * peer_verify is NONE, which triggers "No TLS credential found". */
 	int verify = TLS_PEER_VERIFY_NONE;
 
 	zsock_setsockopt(sock, SOL_TLS, TLS_PEER_VERIFY,
 			 &verify, sizeof(verify));
-	zsock_setsockopt(sock, SOL_TLS, TLS_SEC_TAG_LIST,
-			 tls_tags, sizeof(tls_tags));
 	zsock_setsockopt(sock, SOL_TLS, TLS_HOSTNAME,
 			 INFLUX_HOST, strlen(INFLUX_HOST));
 

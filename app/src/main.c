@@ -5,6 +5,7 @@
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/uuid.h>
+#include <zephyr/settings/settings.h>
 #include <zephyr/logging/log.h>
 #include "ringone_sensors.h"
 #include "wifi_prov.h"
@@ -309,6 +310,11 @@ int main(void)
 		LOG_ERR("Bluetooth init failed (err %d)", err);
 		return err;
 	}
+
+	/* Load BT identity address and bonding keys from NVS before advertising.
+	 * Required when CONFIG_BT_SETTINGS=y — without this the controller has
+	 * no ID address and bt_le_adv_start() returns -EAGAIN. */
+	settings_load();
 
 	/* Pass WiFi-Status GATT attr to wifi_prov for notify (attrs[21]) */
 	wifi_prov_set_status_attr(&ringone_svc.attrs[21]);
