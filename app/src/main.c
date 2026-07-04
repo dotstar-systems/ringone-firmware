@@ -256,11 +256,13 @@ static void notify_work_handler(struct k_work *work)
 	watchdog_feed();
 
 	/* Telemetry counter: publish every RINGONE_TELEMETRY_INTERVAL_SEC */
-	s_notify_ticks += 2;
-	if (s_notify_ticks >= CONFIG_RINGONE_TELEMETRY_INTERVAL_SEC) {
-		s_notify_ticks = 0;
-		influx_telemetry_publish(&g_data);   /* PATH B */
-		mqtt_publish_telemetry(&g_data);     /* PATH C */
+	if (IS_ENABLED(CONFIG_RINGONE_CLOUD_ENABLE)) {
+		s_notify_ticks += 2;
+		if (s_notify_ticks >= CONFIG_RINGONE_TELEMETRY_INTERVAL_SEC) {
+			s_notify_ticks = 0;
+			influx_telemetry_publish(&g_data);   /* PATH B */
+			mqtt_publish_telemetry(&g_data);     /* PATH C */
+		}
 	}
 
 	int16_t temp_int  = g_data.temperature / 100;
@@ -324,25 +326,30 @@ int main(void)
 	start_advertising();
 	LOG_INF("Ring-One advertising as \"%s\"", CONFIG_BT_DEVICE_NAME);
 
-	/* c. Wi-Fi provisioning — async, spawns wifi_prov thread */
-	err = wifi_prov_init();
-	if (err) {
-		LOG_ERR("wifi_prov_init failed (err %d)", err);
-	}
+	if (IS_ENABLED(CONFIG_RINGONE_CLOUD_ENABLE)) {
+		/* c. Wi-Fi provisioning — async, spawns wifi_prov thread */
+		err = wifi_prov_init();
+		if (err) {
+			LOG_ERR("wifi_prov_init failed (err %d)", err);
+		}
 
-	/* d. SNTP time sync — async, spawns sntp_sync thread */
-	sntp_sync();
+		/* d. SNTP time sync — async, spawns sntp_sync thread */
+		sntp_sync();
 
-	/* e. InfluxDB HTTPS telemetry — async, spawns influx_pub thread */
-	err = influx_telemetry_init();
-	if (err) {
-		LOG_ERR("influx_telemetry_init failed (err %d)", err);
-	}
+		/* e. InfluxDB HTTPS telemetry — async, spawns influx_pub thread */
+		err = influx_telemetry_init();
+		if (err) {
+			LOG_ERR("influx_telemetry_init failed (err %d)", err);
+		}
 
-	/* f. MQTT HiveMQ bidirectional — async, spawns mqtt_client thread */
-	err = ringone_mqtt_init();
-	if (err) {
-		LOG_ERR("mqtt_client_init failed (err %d)", err);
+		/* f. MQTT HiveMQ bidirectional — async, spawns mqtt_client thread */
+		err = ringone_mqtt_init();
+		if (err) {
+			LOG_ERR("mqtt_client_init failed (err %d)", err);
+		}
+	} else {
+		LOG_WRN("RINGONE_CLOUD_ENABLE=n — BLE-only mode, "
+			"Wi-Fi/InfluxDB/MQTT skipped");
 	}
 
 	/* Start 2 s BLE notify + telemetry loop */

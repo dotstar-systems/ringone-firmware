@@ -1,6 +1,16 @@
 # Ring•One Firmware · Dotstar Consulting · Apache 2.0
 # Ring-One application Kconfig — sourced from app/Kconfig
 
+config RINGONE_CLOUD_ENABLE
+	bool "Enable Wi-Fi provisioning + cloud telemetry"
+	default y
+	help
+	  Disable for BLE-only local bench testing: skips wifi_prov_init(),
+	  sntp_sync(), influx_telemetry_init(), ringone_mqtt_init(), and the
+	  periodic InfluxDB/MQTT publish — no Wi-Fi AP or cloud broker needed.
+	  BLE advertising, GATT notifications and sensor reads are unaffected.
+	  Build with: -DCONFIG_RINGONE_CLOUD_ENABLE=n
+
 config RINGONE_TELEMETRY_INTERVAL_SEC
 	int "Telemetry publish interval seconds"
 	default 30
