@@ -18,6 +18,7 @@
 #include <zephyr/logging/log.h>
 #include <psa/protected_storage.h>
 #include <string.h>
+#include "ringone_sensors.h"
 
 LOG_MODULE_REGISTER(ringone_shell, LOG_LEVEL_INF);
 
@@ -81,3 +82,36 @@ SHELL_STATIC_SUBCMD_SET_CREATE(ringone_cred_cmds,
 SHELL_CMD_REGISTER(ringone_cred, &ringone_cred_cmds,
 	"Provision Ring-One cloud credentials into PSA Protected Storage.",
 	NULL);
+
+/*
+ * ringone spo2 — manually fetch one raw MAX30101 RED/IR sample plus the
+ * current post-processed heart rate / SpO2, for bench debugging
+ * independent of the 2 s BLE notify loop.
+ */
+static int cmd_ringone_spo2(const struct shell *sh, size_t argc, char **argv)
+{
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+
+	uint32_t red, ir;
+	int err = ringone_sensors_read_raw(&red, &ir);
+
+	if (err) {
+		shell_error(sh, "MAX30101 read failed (err %d) — not ready yet?", err);
+		return err;
+	}
+
+	shell_print(sh, "red=%u ir=%u  hr=%u bpm  spo2=%u%%",
+		    red, ir, ringone_read_heart_rate(), ringone_read_spo2());
+	return 0;
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(ringone_cmds,
+	SHELL_CMD_ARG(spo2, NULL,
+		"Read one raw MAX30101 RED/IR sample + current HR/SpO2",
+		cmd_ringone_spo2, 1, 0),
+	SHELL_SUBCMD_SET_END
+);
+
+SHELL_CMD_REGISTER(ringone, &ringone_cmds,
+	"Ring-One sensor diagnostics commands.", NULL);

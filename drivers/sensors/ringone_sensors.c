@@ -122,6 +122,21 @@ static int max30101_bringup(void)
 	return 0;
 }
 
+static int max30101_fetch_sample(uint32_t *red, uint32_t *ir)
+{
+	struct sensor_value red_val, ir_val;
+
+	if (sensor_sample_fetch(max30101_dev) ||
+	    sensor_channel_get(max30101_dev, SENSOR_CHAN_RED, &red_val) ||
+	    sensor_channel_get(max30101_dev, SENSOR_CHAN_IR, &ir_val)) {
+		return -EIO;
+	}
+
+	*red = (uint32_t)red_val.val1;
+	*ir  = (uint32_t)ir_val.val1;
+	return 0;
+}
+
 static void ppg_poll_handler(struct k_work *work)
 {
 	ARG_UNUSED(work);
@@ -134,12 +149,10 @@ static void ppg_poll_handler(struct k_work *work)
 		}
 	}
 
-	struct sensor_value red, ir;
+	uint32_t red, ir;
 
-	if (sensor_sample_fetch(max30101_dev) == 0 &&
-	    sensor_channel_get(max30101_dev, SENSOR_CHAN_RED, &red) == 0 &&
-	    sensor_channel_get(max30101_dev, SENSOR_CHAN_IR, &ir) == 0) {
-		ringone_ppg_process_sample((uint32_t)red.val1, (uint32_t)ir.val1);
+	if (max30101_fetch_sample(&red, &ir) == 0) {
+		ringone_ppg_process_sample(red, ir);
 	} else {
 		LOG_WRN("MAX30101 sample fetch failed");
 	}
@@ -166,6 +179,15 @@ int ringone_sensors_init(void)
 
 	LOG_INF("Ring-One sensors initialised");
 	return 0;
+}
+
+int ringone_sensors_read_raw(uint32_t *red, uint32_t *ir)
+{
+	if (!device_is_ready(max30101_dev)) {
+		return -ENODEV;
+	}
+
+	return max30101_fetch_sample(red, ir);
 }
 
 /* RING_ONE_TODO: replace stub with real temperature driver
