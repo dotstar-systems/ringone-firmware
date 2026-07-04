@@ -26,12 +26,18 @@
 #define SAMPLE_PERIOD_MS    (1000 / SAMPLE_RATE_HZ)
 
 #define DC_ALPHA            0.02f   /* DC tracker time constant ~1 s */
+#define PEAK_LPF_ALPHA      0.25f   /* smooths the AC signal before peak
+				     * detection so single-sample ADC/shot
+				     * noise can't be mistaken for beats */
 #define RMS_ALPHA           0.05f   /* AC RMS tracker time constant ~0.4 s */
 #define PEAK_THRESHOLD_FRAC 0.3f    /* peak must exceed 30% of RMS(AC) */
 
 #define MIN_IBI_MS          300     /* 200 BPM cap */
 #define MAX_IBI_MS          2000    /* 30 BPM floor; longer gaps reset history */
 #define IBI_HISTORY_LEN     4
+/* Don't report a BPM off a single noisy peak — require a few consistent
+ * beats first. */
+#define MIN_VALID_BEATS     3
 
 #define MIN_AC_RMS_COUNTS   150.0f  /* below this: no finger / no pulse */
 #define MIN_DC_COUNTS       1000.0f /* below this: no finger on sensor */
@@ -45,6 +51,8 @@ struct ppg_state {
 	bool  dc_init;
 
 	/* Heart-rate peak detection (driven off the IR channel) */
+	float    ac_ir_filt;
+	bool     ac_ir_filt_init;
 	float    ac_ir_prev;
 	float    ac_ir_prev2;
 	float    ac_ir_rms_sq_ema;
@@ -57,6 +65,10 @@ struct ppg_state {
 	uint8_t  ibi_history_next;
 
 	uint8_t  heart_rate_bpm;
+	/* True once MIN_VALID_BEATS consistent beats have been seen; also
+	 * gates SpO2 so it doesn't report a ratio computed from noise while
+	 * the HR detector itself doesn't trust the signal. */
+	bool     hr_confirmed;
 
 	/* SpO2 ratio-of-ratios window accumulators */
 	float    win_sum_ac_red_sq;
@@ -75,8 +87,19 @@ void ringone_ppg_reset(void)
 	memset(&s, 0, sizeof(s));
 }
 
-static void update_heart_rate(float ac_ir)
+static void update_heart_rate(float ac_ir_raw)
 {
+	/* Smooth out single-sample ADC/shot noise before peak detection —
+	 * without this, noise spikes get counted as beats and the reported
+	 * BPM pegs at the refractory ceiling (200). */
+	if (!s.ac_ir_filt_init) {
+		s.ac_ir_filt = ac_ir_raw;
+		s.ac_ir_filt_init = true;
+	} else {
+		s.ac_ir_filt += (ac_ir_raw - s.ac_ir_filt) * PEAK_LPF_ALPHA;
+	}
+	float ac_ir = s.ac_ir_filt;
+
 	/* Track signal energy; used both as finger-presence gate and as the
 	 * basis for a dynamic peak threshold that follows signal strength. */
 	s.ac_ir_rms_sq_ema += (ac_ir * ac_ir - s.ac_ir_rms_sq_ema) * RMS_ALPHA;
@@ -91,6 +114,7 @@ static void update_heart_rate(float ac_ir)
 		s.have_last_beat = false;
 		s.ibi_history_count = 0;
 		s.heart_rate_bpm = 0;
+		s.hr_confirmed = false;
 		s.ac_ir_prev2 = s.ac_ir_prev;
 		s.ac_ir_prev = ac_ir;
 		s.sample_idx++;
@@ -132,14 +156,17 @@ static void update_heart_rate(float ac_ir)
 				}
 				s.last_beat_sample_idx = peak_sample_idx;
 
-				uint32_t sum_ms = 0;
+				if (s.ibi_history_count >= MIN_VALID_BEATS) {
+					uint32_t sum_ms = 0;
 
-				for (int i = 0; i < s.ibi_history_count; i++) {
-					sum_ms += s.ibi_history_ms[i];
+					for (int i = 0; i < s.ibi_history_count; i++) {
+						sum_ms += s.ibi_history_ms[i];
+					}
+					uint32_t avg_ibi_ms = sum_ms / s.ibi_history_count;
+
+					s.heart_rate_bpm = (uint8_t)(60000u / avg_ibi_ms);
+					s.hr_confirmed = true;
 				}
-				uint32_t avg_ibi_ms = sum_ms / s.ibi_history_count;
-
-				s.heart_rate_bpm = (uint8_t)(60000u / avg_ibi_ms);
 			}
 		}
 	}
@@ -151,6 +178,19 @@ static void update_heart_rate(float ac_ir)
 
 static void update_spo2_window(float ac_red, float ac_ir)
 {
+	if (!s.hr_confirmed) {
+		/* Don't let a mid-window loss of signal blend garbage samples
+		 * in with good ones — drop the partial window and wait for a
+		 * confirmed pulse before accumulating again. */
+		s.win_sum_ac_red_sq = 0.0f;
+		s.win_sum_ac_ir_sq  = 0.0f;
+		s.win_sum_dc_red    = 0.0f;
+		s.win_sum_dc_ir     = 0.0f;
+		s.win_count         = 0;
+		s.spo2_pct          = 0;
+		return;
+	}
+
 	s.win_sum_ac_red_sq += ac_red * ac_red;
 	s.win_sum_ac_ir_sq  += ac_ir * ac_ir;
 	s.win_sum_dc_red    += s.dc_red;
