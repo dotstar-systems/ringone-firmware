@@ -4,3 +4,48 @@
 &wdt31 {
 	status = "okay";
 };
+
+/* MAX30101 heart-rate / SpO2 sensor — validated wiring from bring-up
+ * on nRF54LM20DK-A: I2C21 on P1.04 (SDA) / P1.06 (SCL). */
+/ {
+	aliases {
+		heart-rate-sensor = &max30101_sensor;
+	};
+};
+
+&pinctrl {
+	i2c21_default: i2c21_default {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 1, 4)>,
+				<NRF_PSEL(TWIM_SCL, 1, 6)>;
+			bias-pull-up;
+		};
+	};
+
+	i2c21_sleep: i2c21_sleep {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 1, 4)>,
+				<NRF_PSEL(TWIM_SCL, 1, 6)>;
+			low-power-enable;
+		};
+	};
+};
+
+&i2c21 {
+	status = "okay";
+	pinctrl-0 = <&i2c21_default>;
+	pinctrl-1 = <&i2c21_sleep>;
+	pinctrl-names = "default", "sleep";
+	clock-frequency = <I2C_BITRATE_FAST>; /* 400 kHz */
+
+	max30101_sensor: max30101@57 {
+		status = "okay";
+		compatible = "maxim,max30101";
+		reg = <0x57>;
+		/* Sensor power rail settles after the rest of the board is
+		 * up — deferred-init lets ringone_sensors_init() retry the
+		 * bring-up sequence instead of failing a POST_KERNEL init. */
+		zephyr,deferred-init;
+		acq-mode = "spo2";
+	};
+};

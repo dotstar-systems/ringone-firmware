@@ -13,6 +13,7 @@ target_sources(app PRIVATE
   src/watchdog.c
   src/ringone_shell.c
   ../drivers/sensors/ringone_sensors.c
+  ../drivers/sensors/ringone_ppg.c
 )
 
 target_include_directories(app PRIVATE
