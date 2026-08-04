@@ -210,6 +210,6 @@ The `build-wifi-secure` CI job is a placeholder.  To enable TF-M:
    CONFIG_PM_PARTITION_SIZE_TFM_SRAM=0xa000
    ```
 2. Create `pm_static.yml` defining the Secure/Non-Secure partition split
-3. Build target: `nrf54lm20dk/nrf54lm20a/cpuapp/ns`
+3. Build target: `nrf54lm20dk/nrf54lm20b/cpuapp/ns`
 4. PSA Protected Storage (already used for InfluxDB token and MQTT creds)
    will be backed by the TF-M ITS (Internal Trusted Storage) API

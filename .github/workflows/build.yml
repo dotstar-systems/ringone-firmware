@@ -73,7 +73,7 @@ jobs:
       - name: Build BLE-only
         run: |
           west build \
-            -b nrf54lm20dk/nrf54lm20a/cpuapp \
+            -b nrf54lm20dk/nrf54lm20b/cpuapp \
             ringone-firmware/app \
             --build-dir build-ble-only
 
@@ -147,7 +147,7 @@ jobs:
       - name: Build Wi-Fi + BLE coexistence
         run: |
           west build \
-            -b nrf54lm20dk/nrf54lm20a/cpuapp \
+            -b nrf54lm20dk/nrf54lm20b/cpuapp \
             ringone-firmware/app \
             --build-dir build-wifi \
             -- -DSHIELD="nrf7002eb2;nrf7002eb2_coex"
@@ -220,7 +220,7 @@ jobs:
           "$HOME/zephyr-sdk-0.17.0/setup.sh" -t arm-zephyr-eabi -c
 
       # RING_ONE_TODO: enable TF-M partition
-      # The /ns target (nrf54lm20dk/nrf54lm20a/cpuapp/ns) requires a
+      # The /ns target (nrf54lm20dk/nrf54lm20b/cpuapp/ns) requires a
       # TF-M build configuration.  Once the Secure Processing Environment
       # partition is configured in pm_static.yml and the TF-M trust zone
       # setup is complete, remove this comment and uncomment the build step.
@@ -233,10 +233,10 @@ jobs:
       - name: Build Wi-Fi secure (TF-M placeholder)
         run: |
           echo "RING_ONE_TODO: TF-M /ns build not yet configured."
-          echo "Target: nrf54lm20dk/nrf54lm20a/cpuapp/ns with shield nrf7002eb2;nrf7002eb2_coex"
+          echo "Target: nrf54lm20dk/nrf54lm20b/cpuapp/ns with shield nrf7002eb2;nrf7002eb2_coex"
           echo "See docs/cloud-setup.md for TF-M partition requirements."
           # west build \
-          #   -b nrf54lm20dk/nrf54lm20a/cpuapp/ns \
+          #   -b nrf54lm20dk/nrf54lm20b/cpuapp/ns \
           #   ringone-firmware/app \
           #   --build-dir build-wifi-secure \
           #   -- -DSHIELD="nrf7002eb2;nrf7002eb2_coex"

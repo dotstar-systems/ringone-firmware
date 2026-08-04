@@ -1,5 +1,5 @@
 /* Ring•One Firmware · Dotstar Consulting · Apache 2.0 */
-/* DTS overlay: enable watchdog0 (wdt31) on nRF54LM20A */
+/* DTS overlay: enable watchdog0 (wdt31) on nRF54LM20B */
 
 &wdt31 {
 	status = "okay";

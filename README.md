@@ -36,7 +36,7 @@ Plug nRF7002 EB2 shield onto the nRF54LM20DK P1/P2 headers.
 
 ### Build with Wi-Fi (primary target)
 ```sh
-west build -b nrf54lm20dk/nrf54lm20a/cpuapp app/ \
+west build -b nrf54lm20dk/nrf54lm20b/cpuapp app/ \
   --pristine -- -DSHIELD="nrf7002eb2;nrf7002eb2_coex"
 ```
 
@@ -119,7 +119,7 @@ west update
 
 ```sh
 # Wi-Fi + BLE coexistence (primary):
-west build -b nrf54lm20dk/nrf54lm20a/cpuapp ringone-firmware/app \
+west build -b nrf54lm20dk/nrf54lm20b/cpuapp ringone-firmware/app \
   -- -DSHIELD="nrf7002eb2;nrf7002eb2_coex"
 
 # BLE-only (no Wi-Fi shield):

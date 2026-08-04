@@ -80,7 +80,7 @@ static void sntp_thread_fn(void *p1, void *p2, void *p3)
 
 	LOG_ERR("SNTP: max retries reached — using uptime offset");
 	/* RING_ONE_TODO: use RTC peripheral to persist time across reboots
-	 * nRF54LM20A has Global RTC in System-OFF; store unix offset in NVS
+	 * nRF54LM20B has Global RTC in System-OFF; store unix offset in NVS
 	 * and restore at boot to avoid the "epoch + uptime" fallback. */
 }
 

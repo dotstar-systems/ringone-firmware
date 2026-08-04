@@ -70,7 +70,7 @@ config RINGONE_SOFTAP_SSID
 	string "SoftAP provisioning network name"
 	default "dotstar-ringone-setup"
 	help
-	  SSID broadcast by the nRF54LM20A when in SoftAP provisioning mode.
+	  SSID broadcast by the nRF54LM20B when in SoftAP provisioning mode.
 
 config RINGONE_SOFTAP_TIMEOUT_SEC
 	int "SoftAP auto-shutdown timeout seconds"
