@@ -97,6 +97,30 @@ InfluxDB → Grafana: native InfluxDB data source plugin
   bucket = "ringone"
 ```
 
+### Local demo (no cloud accounts)
+
+`local_cloud` branch, for demoing against [ringone-cloud-local](../ringone-cloud-local)
+(self-hosted InfluxDB + Mosquitto + Grafana) instead of the live HiveMQ
+Cloud / InfluxDB Cloud accounts above:
+
+```sh
+# In ringone-cloud-local: ./ringone-cloud start
+# prints the LAN IP to use below.
+west build -b nrf54lm20dk/nrf54lm20b/cpuapp app/ \
+  -- -DSHIELD="nrf7002eb2;nrf7002eb2_coex" \
+     -DEXTRA_CONF_FILE=local_cloud.conf \
+     -DCONFIG_RINGONE_INFLUX_HOST=\"<lan-ip>\" \
+     -DCONFIG_RINGONE_MQTT_BROKER_HOST=\"<lan-ip>:8883\"
+```
+
+Then provision the InfluxDB token over the device shell:
+```
+uart:~$ ringone_cred set influx_token ringone-local-dev-token
+```
+
+See `app/local_cloud.conf` for details — no MQTT credentials needed,
+Mosquitto there allows anonymous connections.
+
 ---
 
 ## Building
