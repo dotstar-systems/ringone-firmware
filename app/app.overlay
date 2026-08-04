@@ -57,8 +57,27 @@
 		 * at ring form-factor proximity that pins the photodiode at
 		 * ADC full-scale (raw reads 0x3FFFF, i.e. 32767 after the
 		 * driver's data_shift), clipping the AC/pulsatile component
-		 * flat and leaving heart-rate/SpO2 stuck at 0. Start lower;
-		 * retune against `ringone spo2` on actual hardware. */
-		led-pa = [24 24 00];
+		 * flat and leaving heart-rate/SpO2 stuck at 0.
+		 *
+		 * led-pa=0x24 (previous value) stopped the saturation, but
+		 * ringone_ppg debug logging on hardware showed the real
+		 * pulsatile AC settles at only ~9-13 counts against a ~7460
+		 * DC baseline once contact stabilises — ~0.15% modulation,
+		 * over 10x below MIN_AC_RMS_COUNTS (150). DC is still only
+		 * ~23% of the way to the saturation ceiling there, but AC
+		 * scales with DC, so LED current alone tops out around
+		 * ~55-60 counts even pushed to the saturation edge — not
+		 * enough by itself.
+		 *
+		 * led-pw's default (69 us) only gives 15-bit resolution, so
+		 * the driver's data_shift discards the bottom 3 raw bits.
+		 * 411 us (18-bit, data_shift=0) recovers those for free — an
+		 * 8x count gain with no extra LED current or noise. Paired
+		 * with a smaller led-pa bump for margin, this should clear
+		 * the AC threshold while keeping steady-state DC well under
+		 * the (now finer-grained) saturation ceiling. Retune against
+		 * `ringone spo2` on actual hardware. */
+		led-pw = <411>;
+		led-pa = [60 60 00];
 	};
 };

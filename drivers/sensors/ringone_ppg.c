@@ -20,7 +20,10 @@
 #include <math.h>
 #include <stdbool.h>
 #include <string.h>
+#include <zephyr/logging/log.h>
 #include "ringone_ppg.h"
+
+LOG_MODULE_REGISTER(ringone_ppg, LOG_LEVEL_INF);
 
 #define SAMPLE_RATE_HZ      50
 #define SAMPLE_PERIOD_MS    (1000 / SAMPLE_RATE_HZ)
@@ -107,6 +110,18 @@ static void update_heart_rate(float ac_ir_raw)
 
 	bool signal_present = (ac_ir_rms >= MIN_AC_RMS_COUNTS) &&
 			      (s.dc_ir >= MIN_DC_COUNTS);
+
+	/* Throttled to 1 Hz — bench debugging for finger-presence / AC
+	 * signal margin without flooding the log at the 50 Hz sample rate.
+	 * Silent by default (module registered at LOG_LEVEL_INF); enable
+	 * with `log enable dbg ringone_ppg` at the shell when re-tuning. */
+	if ((s.sample_idx % SAMPLE_RATE_HZ) == 0) {
+		LOG_DBG("ppg: dc_ir=%d (need %d) ac_ir_rms=%d (need %d) "
+			"signal=%d hr_confirmed=%d hr=%u",
+			(int)s.dc_ir, (int)MIN_DC_COUNTS,
+			(int)ac_ir_rms, (int)MIN_AC_RMS_COUNTS,
+			signal_present, s.hr_confirmed, s.heart_rate_bpm);
+	}
 
 	if (!signal_present) {
 		/* No finger / no usable pulse: drop beat history so a stale
@@ -217,8 +232,19 @@ static void update_spo2_window(float ac_red, float ac_ir)
 			spo2 = 70.0f;
 		}
 		s.spo2_pct = (uint8_t)(spo2 + 0.5f);
+		LOG_DBG("ppg: spo2 window OK dc_red=%d dc_ir=%d rms_red=%d "
+			"rms_ir=%d r=%d.%02d -> spo2=%u%%",
+			(int)mean_dc_red, (int)mean_dc_ir,
+			(int)rms_red, (int)rms_ir,
+			(int)r, (int)(fabsf(r - (int)r) * 100),
+			s.spo2_pct);
 	} else {
 		s.spo2_pct = 0;
+		LOG_DBG("ppg: spo2 window REJECTED dc_red=%d(need %d) "
+			"dc_ir=%d(need %d) rms_ir=%d(need %d)",
+			(int)mean_dc_red, (int)MIN_DC_COUNTS,
+			(int)mean_dc_ir, (int)MIN_DC_COUNTS,
+			(int)rms_ir, (int)MIN_AC_RMS_COUNTS);
 	}
 
 	s.win_sum_ac_red_sq = 0.0f;
