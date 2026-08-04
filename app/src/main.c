@@ -7,6 +7,7 @@
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/settings/settings.h>
 #include <zephyr/logging/log.h>
+#include <hw_unique_key.h>
 #include "ringone_sensors.h"
 #include "wifi_prov.h"
 #include "influx_telemetry.h"
@@ -298,6 +299,21 @@ int main(void)
 	err = watchdog_init();
 	if (err) {
 		LOG_WRN("watchdog_init failed (err %d) — continuing", err);
+	}
+
+	/* PSA Protected Storage (ringone_cred, TLS credential backend) derives
+	 * its AEAD key from a CRACEN hardware-unique key held in KMU. A
+	 * never-provisioned chip has none, and every psa_ps_*() call fails
+	 * with PSA_ERROR_BAD_STATE until one is written — do that here, once,
+	 * before anything touches protected storage. */
+	if (!hw_unique_key_are_any_written()) {
+		int huk_err = hw_unique_key_write_random();
+
+		if (huk_err != HW_UNIQUE_KEY_SUCCESS) {
+			LOG_ERR("hw_unique_key_write_random failed (err %d)", huk_err);
+		} else {
+			LOG_INF("Provisioned random hardware-unique key into KMU");
+		}
 	}
 
 	err = ringone_sensors_init();
