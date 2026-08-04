@@ -1,4 +1,4 @@
--- Ring•One Firmware · Dotstar Consulting · Apache 2.0
+-- Ring•One Firmware · Dotstar Systems · Apache 2.0
 -- Supabase device registry schema
 -- Apply with: supabase db push
 

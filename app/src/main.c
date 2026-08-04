@@ -1,4 +1,4 @@
-/* Ring•One Firmware · Dotstar Consulting · Apache 2.0 */
+/* Ring•One Firmware · Dotstar Systems · Apache 2.0 */
 
 #include <zephyr/kernel.h>
 #include <zephyr/bluetooth/bluetooth.h>
@@ -291,8 +291,8 @@ int main(void)
 {
 	int err;
 
-	LOG_INF("Ring-One | Dotstar Systems and Consulting | "
-		"dotstarconsulting.com");
+	LOG_INF("Ring-One | Dotstar Systems | "
+		"dotstarsystems.com");
 
 	/* a. Hardware watchdog — must be first */
 	err = watchdog_init();

@@ -1,4 +1,4 @@
-/* Ring•One Firmware · Dotstar Consulting · Apache 2.0 */
+/* Ring•One Firmware · Dotstar Systems · Apache 2.0 */
 #ifndef SNTP_SYNC_H
 #define SNTP_SYNC_H
 

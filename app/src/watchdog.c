@@ -1,4 +1,4 @@
-/* Ring•One Firmware · Dotstar Consulting · Apache 2.0 */
+/* Ring•One Firmware · Dotstar Systems · Apache 2.0 */
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -13,7 +13,8 @@ LOG_MODULE_REGISTER(watchdog, LOG_LEVEL_INF);
 
 #define WDT_TIMEOUT_MS  30000U   /* 30 s hardware watchdog */
 
-/* Use the board-defined watchdog0 alias (maps to wdt31 on nRF54LM20B).
+/* Use the board-defined watchdog0 alias (maps to wdt31 — same peripheral
+ * on both the nRF54LM20A and nRF54LM20B SoC variants).
  * The node must be enabled via DTS overlay — see app.overlay. */
 static const struct device *const s_wdt =
 	DEVICE_DT_GET(DT_ALIAS(watchdog0));

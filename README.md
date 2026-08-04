@@ -4,7 +4,7 @@ Firmware for the Ring•One industrial smart ring reference platform.
 
 **Platform:** Nordic nRF54LM20DK · **SDK:** nRF Connect SDK v3.3.0 · **BLE:** 5.4
 
-Developed by [Dotstar Systems and Consulting](https://dotstarconsulting.com).
+Developed by [Dotstar Systems](https://dotstarsystems.com).
 
 ---
 
@@ -169,4 +169,4 @@ Replace with real drivers when hardware is available:
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).  
-Copyright (c) 2026 Dotstar Systems and Consulting (dotstarconsulting.com)
+Copyright (c) 2026 Dotstar Systems (dotstarsystems.com)

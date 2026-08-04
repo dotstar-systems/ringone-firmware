@@ -1,6 +1,6 @@
 /*
  * Ring•One Firmware
- * Copyright (c) 2026 Dotstar Systems and Consulting (dotstarconsulting.com)
+ * Copyright (c) 2026 Dotstar Systems (dotstarsystems.com)
  * SPDX-License-Identifier: Apache-2.0
  */
 
