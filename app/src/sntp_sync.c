@@ -10,7 +10,7 @@
 
 LOG_MODULE_REGISTER(sntp_sync, LOG_LEVEL_INF);
 
-#define SNTP_SERVER      "pool.ntp.org"
+#define SNTP_SERVER      CONFIG_RINGONE_SNTP_SERVER
 #define SNTP_TIMEOUT_MS  5000
 #define SNTP_RETRY_SEC   30
 #define SNTP_MAX_RETRIES 5

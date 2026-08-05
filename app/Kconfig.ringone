@@ -37,6 +37,18 @@ config RINGONE_INFLUX_INTERVAL_SEC
 	  still refreshed on the 2 s notify_work_handler cadence in
 	  main.c, so it will not surface faster than that.
 
+config RINGONE_SNTP_SERVER
+	string "SNTP server hostname or IP"
+	default "pool.ntp.org"
+	help
+	  NTP source for sntp_sync.c's time sync. Accepts a hostname or a
+	  literal IP (sntp_simple() resolves either via getaddrinfo).
+	  Override for offline/local-network demos where pool.ntp.org isn't
+	  reachable — after sntp_thread_fn()'s retries are exhausted,
+	  sntp_get_unix_time() falls back to a raw uptime counter (not a
+	  real Unix timestamp), which corrupts the "ts" field in every
+	  InfluxDB/MQTT publish until a sync eventually succeeds.
+
 config RINGONE_INFLUX_HOST
 	string "InfluxDB Cloud hostname"
 	default "eu-central-1-1.aws.cloud2.influxdata.com"
