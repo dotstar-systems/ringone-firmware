@@ -230,6 +230,23 @@ static K_WORK_DELAYABLE_DEFINE(notify_work, notify_work_handler);
 
 static uint32_t s_notify_ticks;
 
+/* ── InfluxDB publish loop (own cadence, RINGONE_INFLUX_INTERVAL_SEC) ──
+ * Decoupled from notify_work's 2 s sensor-read cadence: this just reposts
+ * whatever g_data last held. g_data is only ever written by notify_work_handler
+ * and only ever read here, and both run on the system workqueue, so there's
+ * no concurrent access despite the two work items being logically separate. */
+static void influx_post_work_handler(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(influx_post_work, influx_post_work_handler);
+
+static void influx_post_work_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	influx_telemetry_publish(&g_data);   /* PATH B */
+	k_work_reschedule(&influx_post_work,
+			  K_SECONDS(CONFIG_RINGONE_INFLUX_INTERVAL_SEC));
+}
+
 static void notify_work_handler(struct k_work *work)
 {
 	ARG_UNUSED(work);
@@ -256,12 +273,14 @@ static void notify_work_handler(struct k_work *work)
 	/* Feed hardware watchdog every 2 s tick (well within 30 s window) */
 	watchdog_feed();
 
-	/* Telemetry counter: publish every RINGONE_TELEMETRY_INTERVAL_SEC */
+	/* MQTT telemetry counter: publish every RINGONE_TELEMETRY_INTERVAL_SEC.
+	 * InfluxDB (PATH B) runs on its own faster, independent cadence — see
+	 * influx_post_work below — since it reuses a persistent connection and
+	 * isn't tied to MQTT's publish-cost tradeoff. */
 	if (IS_ENABLED(CONFIG_RINGONE_CLOUD_ENABLE)) {
 		s_notify_ticks += 2;
 		if (s_notify_ticks >= CONFIG_RINGONE_TELEMETRY_INTERVAL_SEC) {
 			s_notify_ticks = 0;
-			influx_telemetry_publish(&g_data);   /* PATH B */
 			mqtt_publish_telemetry(&g_data);     /* PATH C */
 		}
 	}
@@ -357,6 +376,8 @@ int main(void)
 		if (err) {
 			LOG_ERR("influx_telemetry_init failed (err %d)", err);
 		}
+		k_work_schedule(&influx_post_work,
+				K_SECONDS(CONFIG_RINGONE_INFLUX_INTERVAL_SEC));
 
 		/* f. MQTT HiveMQ bidirectional — async, spawns mqtt_client thread */
 		err = ringone_mqtt_init();

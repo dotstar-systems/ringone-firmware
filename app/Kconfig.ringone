@@ -12,13 +12,30 @@ config RINGONE_CLOUD_ENABLE
 	  Build with: -DCONFIG_RINGONE_CLOUD_ENABLE=n
 
 config RINGONE_TELEMETRY_INTERVAL_SEC
-	int "Telemetry publish interval seconds"
+	int "MQTT telemetry publish interval seconds"
 	default 30
 	range 10 300
 	help
-	  How often to publish telemetry to InfluxDB and MQTT broker.
-	  30 s balances data resolution vs battery life.
+	  How often to publish telemetry over MQTT (PATH C). MQTT stays
+	  connected persistently, so this mainly trades data resolution vs
+	  battery/airtime — it doesn't pay a new handshake per publish.
 	  TWT sleep cycle on nRF7002 is tuned to this interval.
+
+config RINGONE_INFLUX_INTERVAL_SEC
+	int "InfluxDB publish interval seconds"
+	default 1
+	range 1 300
+	help
+	  How often to publish telemetry directly to InfluxDB over HTTPS
+	  (PATH B). Decoupled from RINGONE_TELEMETRY_INTERVAL_SEC (MQTT)
+	  since the two paths have very different per-publish cost: MQTT
+	  reuses one long-lived connection, while PATH B pays a TCP+TLS
+	  handshake for the first write and then reuses that connection
+	  too (see influx_telemetry.c) — but a stale/closed connection
+	  still costs one reconnect. Note this only changes how often the
+	  *last known* sensor reading is posted; the reading itself is
+	  still refreshed on the 2 s notify_work_handler cadence in
+	  main.c, so it will not surface faster than that.
 
 config RINGONE_INFLUX_HOST
 	string "InfluxDB Cloud hostname"

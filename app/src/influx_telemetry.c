@@ -21,6 +21,7 @@
 #include <zephyr/bluetooth/bluetooth.h>
 #include <psa/protected_storage.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "influx_telemetry.h"
@@ -34,10 +35,14 @@ LOG_MODULE_REGISTER(influx_telemetry, LOG_LEVEL_INF);
  *                      ca_cert_pem, ca_cert_pem_len);
  * Until provisioned, peer verification is skipped (dev mode). */
 
-/* RING_ONE_TODO: implement write batching — accumulate N points in a
- * local buffer and POST them in a single HTTP request when Wi-Fi wakes
- * from TWT.  This reduces per-wakeup TLS handshake overhead by batching
- * e.g. 3 × 30 s points into one 90 s POST during a TWT service period. */
+/* do_post() reuses one TLS connection across posts instead of paying a
+ * fresh TCP+TLS handshake per write (see s_sock) — that's what makes a
+ * short RINGONE_INFLUX_INTERVAL_SEC viable at all. At longer intervals
+ * (dialed back up for battery life) the server's idle keep-alive timeout
+ * will likely close it between posts anyway, back to one handshake per
+ * write. RING_ONE_TODO for that case: batch N buffered points into a
+ * single POST issued once per TWT wake, instead of reconnecting on a
+ * cadence shorter than the TWT service period. */
 
 #define INFLUX_HOST   CONFIG_RINGONE_INFLUX_HOST
 #define INFLUX_PORT   443
@@ -56,6 +61,13 @@ K_MSGQ_DEFINE(s_queue, sizeof(ringone_data_t), 4, 4);
 static volatile bool s_influx_ok;
 static char s_device_id[16];
 static char s_token[INFLUX_TOKEN_MAX_LEN];
+
+/* Persistent TLS socket, reused across posts — only touched by influx_thread_fn.
+ * A fresh TCP+TLS handshake per write is the dominant cost of a PATH B post
+ * (hundreds of ms on this hardware); reusing the connection turns a repost
+ * into one HTTP request/response over an already-open channel, which is what
+ * makes a short RINGONE_INFLUX_INTERVAL_SEC actually viable. -1 == closed. */
+static int s_sock = -1;
 
 /* L4 connectivity */
 static struct net_mgmt_event_callback s_l4_cb;
@@ -82,13 +94,25 @@ static void derive_device_id(void)
 	size_t count = 1;
 
 	bt_id_get(&addr, &count);
-	snprintf(s_device_id, sizeof(s_device_id), "rng-%02X%02X",
+	/* Must match mqtt_client.c's derive_device_id() exactly — both paths
+	 * derive from the same BLE address and land in the same InfluxDB
+	 * bucket/measurement (telegraf.conf bridges MQTT in too). A mismatch
+	 * here means Grafana groups one physical ring into two series. */
+	snprintf(s_device_id, sizeof(s_device_id), "ring-one-%02X%02X",
 		 addr.a.val[1], addr.a.val[0]);
 }
 
 /* ── HTTP/TLS POST ────────────────────────────────────────────────── */
 
-static int do_post(const char *body, size_t body_len)
+static void influx_disconnect(void)
+{
+	if (s_sock >= 0) {
+		zsock_close(s_sock);
+		s_sock = -1;
+	}
+}
+
+static int influx_connect(void)
 {
 	struct zsock_addrinfo hints = {
 		.ai_family   = AF_INET,
@@ -139,7 +163,90 @@ static int do_post(const char *body, size_t body_len)
 		return -errno;
 	}
 
-	/* Build HTTP/1.1 POST request */
+	s_sock = sock;
+	return 0;
+}
+
+/* Read one full HTTP/1.1 response off s_sock — status line, headers, and
+ * (if Content-Length says there is one) body — and report the status code.
+ *
+ * This has to fully drain the response, not just grab whatever one recv()
+ * returns: s_sock is reused for the next POST, and any response bytes left
+ * unread here (extra headers, a body past the first packet) would be
+ * misread as the start of the *next* response, corrupting it. That's
+ * exactly what a single-shot recv() got away with before the connection
+ * was made persistent — the socket was thrown away right after, taking any
+ * unread trailing bytes with it.
+ *
+ * *should_reuse is set false when the response has no Content-Length to
+ * bound it (nothing this fixed-shape API sends today, but nothing rules it
+ * out) — without a definite length there's no safe way to know the socket
+ * is left clean, so the caller closes it rather than risk reusing it. */
+static int read_http_response(bool *should_reuse)
+{
+	char buf[512];
+	size_t len = 0;
+	int status = -1;
+	long content_length = -1;
+	char *header_end = NULL;
+
+	*should_reuse = true;
+
+	while (len < sizeof(buf) - 1 && !header_end) {
+		int r = zsock_recv(s_sock, buf + len, sizeof(buf) - 1 - len, 0);
+
+		if (r <= 0) {
+			return -1;
+		}
+		len += (size_t)r;
+		buf[len] = '\0';
+		header_end = strstr(buf, "\r\n\r\n");
+	}
+
+	if (!header_end) {
+		return -1;
+	}
+
+	sscanf(buf, "HTTP/%*d.%*d %d", &status);
+
+	char *cl = strstr(buf, "Content-Length:");
+
+	if (cl && cl < header_end) {
+		content_length = strtol(cl + strlen("Content-Length:"), NULL, 10);
+	}
+
+	if (content_length < 0) {
+		*should_reuse = false;
+		return status;
+	}
+
+	size_t body_have = len - (size_t)((header_end + 4) - buf);
+
+	while ((long)body_have < content_length) {
+		int r = zsock_recv(s_sock, buf, sizeof(buf) - 1, 0);
+
+		if (r <= 0) {
+			return -1;
+		}
+		body_have += (size_t)r;
+	}
+
+	return status;
+}
+
+/* One POST attempt over s_sock, connecting first if it isn't already open.
+ * Any I/O failure closes s_sock so the next attempt (do_post()'s retry, or
+ * the following publish cycle) reconnects from scratch. */
+static int do_post_once(const char *body, size_t body_len)
+{
+	if (s_sock < 0) {
+		int err = influx_connect();
+
+		if (err) {
+			return err;
+		}
+	}
+
 	char url[256];
 
 	snprintf(url, sizeof(url),
@@ -158,34 +265,56 @@ static int do_post(const char *body, size_t body_len)
 		url, INFLUX_HOST, s_token, body_len);
 
 	if (hdr_len < 0 || hdr_len >= (int)sizeof(hdr)) {
-		zsock_close(sock);
 		return -EMSGSIZE;
 	}
 
-	/* Send header + body */
-	zsock_send(sock, hdr, hdr_len, 0);
-	zsock_send(sock, body, body_len, 0);
-
-	/* Read response status line */
-	char resp[64];
-	int r = zsock_recv(sock, resp, sizeof(resp) - 1, 0);
-
-	zsock_close(sock);
-
-	if (r <= 0) {
-		LOG_ERR("InfluxDB: no response (r=%d)", r);
+	if (zsock_send(s_sock, hdr, hdr_len, 0) < 0 ||
+	    zsock_send(s_sock, body, body_len, 0) < 0) {
+		LOG_WRN("InfluxDB: send failed (errno %d) — "
+			"connection likely stale", errno);
+		influx_disconnect();
 		return -EIO;
 	}
-	resp[r] = '\0';
 
-	/* Check for HTTP 204 No Content */
-	if (strstr(resp, "204")) {
+	bool should_reuse;
+	int status = read_http_response(&should_reuse);
+
+	if (status < 0) {
+		LOG_WRN("InfluxDB: no response — connection likely stale");
+		influx_disconnect();
+		return -EIO;
+	}
+
+	if (!should_reuse) {
+		influx_disconnect();
+	}
+
+	if (status == 204) {
 		LOG_INF("InfluxDB write OK [%s]", s_device_id);
 		return 0;
 	}
 
-	LOG_ERR("InfluxDB non-204 response: %.40s", resp);
+	LOG_ERR("InfluxDB write failed: HTTP %d", status);
 	return -EPROTO;
+}
+
+static int do_post(const char *body, size_t body_len)
+{
+	bool had_existing = (s_sock >= 0);
+	int err = do_post_once(body, body_len);
+
+	if (err && had_existing) {
+		/* The one failure mode worth a same-cycle retry: we reused a
+		 * connection that the server (or its idle keep-alive timeout)
+		 * had actually already closed. A fresh connect() should be
+		 * fast since the network path is presumably still good.
+		 * Don't retry a cold-connect failure here — that's already a
+		 * full DNS+TCP+TLS timeout, and the normal per-cycle loop
+		 * will try again next interval. */
+		err = do_post_once(body, body_len);
+	}
+
+	return err;
 }
 
 /* ── Thread ───────────────────────────────────────────────────────── */
